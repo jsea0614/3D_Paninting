@@ -3,7 +3,7 @@
 학생 PC의 색칠 앱이 캐릭터(PNG + JSON)를, iPad가 스캔 파일을 올리고, Quest 앱이 같은 Wi-Fi에서 받아 갑니다.
 인터넷 연결 없이 운영 PC 한 대에서 실행합니다. 데이터 규약: Contract/CONTRACT.md
 
-    uv run main.py --port 8000 [--blender <blender.exe 경로>]
+    uv run main.py --port 8081 [--blender <blender.exe 경로>]
 
 API (규약)
     POST /api/character              multipart: id, json(문자열), file(PNG 1024 또는 2048)
@@ -15,6 +15,11 @@ API (규약)
     GET  /scans/{file}.glb           스캔 GLB
     GET  /scan                       iPad용 스캔 업로드 페이지
     GET  /api/health                 연결 확인
+    POST /api/logs                   기기 로그 수집 (JSON, 최대 256KB/200개)
+    GET  /api/logs                   기기 로그 파일 목록
+    GET  /download                   학생 PC용 색칠 앱 받기 페이지
+    GET  /api/paintapp               색칠 앱 빌드 정보 (available, sizeMB, builtAt)
+    GET  /download/PaintApp_{n}.zip  PC 번호 n용 색칠 앱 (config.json에 serverUrl·studentId가 들어 있음)
 
 이전 API (색칠 앱을 /api/character로 옮기면 제거)
     POST /api/texture, GET /textures/{studentId}.png, GET /api/players
@@ -32,11 +37,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, Path as PathParam, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path as PathParam, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 
 import contract
+from logs import DeviceLogs, MAX_BODY
+from paintapp_dist import PaintAppDist
 from scans import SCAN_EXTENSIONS, Converter, ScanJobs, blender_converter, find_blender
 from storage import CharacterStore, ScanStore
 
@@ -46,6 +53,8 @@ MAX_CHARACTER_PNG_BYTES = 16 * 1024 * 1024
 MAX_SCAN_UPLOAD_BYTES = 200 * 1024 * 1024
 DEFAULT_ITEM_IDS = Path(__file__).resolve().parents[1] / "Contract" / "item_ids.json"
 STATIC_DIR = Path(__file__).parent / "static"
+DEFAULT_PAINTAPP_DIR = Path(__file__).resolve().parents[1] / "Builds" / "PaintApp"
+MAX_PC_ID = 99
 HEADER_ISSUES = {contract.BAD_ID, contract.BAD_NAME, contract.BAD_TEXTURE}
 ID_PATTERN = r"^[A-Za-z0-9_-]{1,32}$"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -141,7 +150,8 @@ class PlayerStore:
             return player
 
 
-def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path: Path = DEFAULT_ITEM_IDS) -> FastAPI:
+def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path: Path = DEFAULT_ITEM_IDS,
+               paintapp_dir: Path = DEFAULT_PAINTAPP_DIR) -> FastAPI:
     app = FastAPI(title="Paint Server")
     store = PlayerStore(data_dir)
     characters = CharacterStore(data_dir)
@@ -154,6 +164,24 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
     app.state.characters = characters
     app.state.scans = scan_store
     app.state.jobs = jobs
+    device_logs = DeviceLogs(data_dir / "logs")
+    paintapp = PaintAppDist(paintapp_dir, data_dir / "dist")
+
+    @app.post("/api/logs")
+    async def append_logs(request: Request):
+        body = await request.body()
+        if len(body) > MAX_BODY:
+            raise HTTPException(413, "로그 본문이 256KB를 넘습니다.")
+        try:
+            batch = json.loads(body)
+        except (ValueError, UnicodeDecodeError) as e:
+            raise HTTPException(400, "잘못된 로그 JSON입니다.") from e
+        await run_in_threadpool(device_logs.append, batch)
+        return {"ok": True, "written": len(batch["entries"])}
+
+    @app.get("/api/logs")
+    def list_logs():
+        return {"devices": device_logs.list()}
 
     @app.get("/api/health")
     def health():
@@ -257,6 +285,28 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
     def scan_page():
         return FileResponse(STATIC_DIR / "scan.html", media_type="text/html; charset=utf-8")
 
+    # ───────────────────────── 색칠 앱 배포 ─────────────────────────
+
+    @app.get("/download")
+    def download_page():
+        return FileResponse(STATIC_DIR / "download.html", media_type="text/html; charset=utf-8")
+
+    @app.get("/api/paintapp")
+    def paintapp_info():
+        return paintapp.info()
+
+    @app.get("/download/PaintApp_{pc_id}.zip")
+    async def paintapp_zip(pc_id: int, request: Request):
+        if not 1 <= pc_id <= MAX_PC_ID:
+            raise HTTPException(400, f"PC 번호는 1~{MAX_PC_ID}입니다.")
+        # 학생 PC가 이 주소로 접속했으니 앱도 같은 주소로 서버를 찾는다.
+        server_url = str(request.base_url).rstrip("/")
+        path = await run_in_threadpool(paintapp.zip_for, pc_id, server_url)
+        if path is None:
+            raise HTTPException(404, "색칠 앱 빌드가 없습니다. 3D_Paninting에서 Tools/Build/Paint App (Windows)를 먼저 실행하세요.")
+        log.info("색칠 앱 받기: PC %d, %s", pc_id, server_url)
+        return FileResponse(path, media_type="application/zip", filename=f"PaintApp_{pc_id:02d}.zip")
+
     # ───────────────────────── 이전 API ─────────────────────────
 
     @app.get("/api/players")
@@ -296,9 +346,10 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
 def main() -> None:
     parser = argparse.ArgumentParser(description="원주시 직업체험 VR 로컬 업로드 서버")
     parser.add_argument("--host", default="0.0.0.0", help="바인드 주소 (기본: 모든 네트워크)")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--data-dir", type=Path, default=Path(__file__).parent / "data")
     parser.add_argument("--blender", default=None, help="blender.exe 경로 (기본: 환경 변수 BLENDER → 기본 설치 위치 → PATH)")
+    parser.add_argument("--paintapp-dir", type=Path, default=DEFAULT_PAINTAPP_DIR, help="/download로 나눠 줄 색칠 앱 빌드 폴더")
     args = parser.parse_args()
 
     import uvicorn
@@ -306,7 +357,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     blender = args.blender or find_blender()
     log.info("Blender: %s", blender)
-    uvicorn.run(create_app(args.data_dir, blender_converter(blender)), host=args.host, port=args.port)
+    uvicorn.run(create_app(args.data_dir, blender_converter(blender), paintapp_dir=args.paintapp_dir), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

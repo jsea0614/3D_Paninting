@@ -133,6 +133,7 @@ namespace Wonju.PaintApp.UI
         {
             doneButton.SetLabel("완료");
             if (dialog.IsOpen) dialog.Close();
+            dialog.ClearNickName();
             ShowToast("새 회차를 시작했어요");
         }
 

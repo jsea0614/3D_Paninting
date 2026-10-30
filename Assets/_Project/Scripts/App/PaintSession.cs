@@ -1,11 +1,12 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Wonju.CharacterShared;
 using Wonju.PaintApp.UI;
 
 namespace Wonju.PaintApp
 {
     /// <summary>
-    /// 앱 전체 흐름을 묶습니다: 설정을 읽고, 서버 연결 상태를 표시하고, 완료 창의 [보내기]를 PNG 업로드로 처리합니다.
+    /// 앱 전체 흐름을 묶습니다: 설정을 읽고, 서버 연결 상태를 표시하고, 완료 창의 [보내기]를 캐릭터(PNG + JSON) 업로드로 처리합니다.
     /// 운영자 단축키: Ctrl+Shift+R 회차 초기화, Ctrl+Shift+Q 앱 종료. 학생이 실수로 누르기 어렵도록 세 키 조합만 씁니다.
     /// </summary>
     public class PaintSession : MonoBehaviour
@@ -95,10 +96,10 @@ namespace Wonju.PaintApp
             }
             uploading = true;
             var png = canvas.EncodePng();
-            StartCoroutine(uploader.Upload(png, (ok, error) =>
+            StartCoroutine(uploader.Upload(png, BuildCharacter(dialog.NickName), result =>
             {
                 uploading = false;
-                if (ok)
+                if (result.Ok)
                 {
                     ui.MarkSubmitted();
                     ui.SetConnection(true);
@@ -106,10 +107,32 @@ namespace Wonju.PaintApp
                 }
                 else
                 {
-                    Debug.LogWarning($"[PaintSession] 업로드 실패, 백업: {uploader.LastBackupPath} ({error})");
-                    dialog.ShowFailure("연결이 안 돼요. 선생님을 불러 주세요.");
+                    Debug.LogWarning($"[PaintSession] 업로드 실패, 백업: {uploader.LastBackupPath} ({result.Error})");
+                    dialog.ShowFailure(result.Rejected
+                        ? "캐릭터 정보에 문제가 있어요. 선생님을 불러 주세요."
+                        : "연결이 안 돼요. 선생님을 불러 주세요.");
                 }
             }));
+        }
+
+        /// <summary>규약 JSON(Contract/CONTRACT.md). 별명을 비우면 "7번"처럼 번호로, 장식은 씬의 AccessoryRig에서 가져옵니다.</summary>
+        CharacterData BuildCharacter(string nickName)
+        {
+            int id = config.Id;
+            var data = new CharacterData
+            {
+                id = id,
+                name = string.IsNullOrEmpty(nickName) ? $"{id}번" : nickName,
+                texture = CharacterData.TextureFileName(id),
+            };
+
+            var rig = FindAnyObjectByType<AccessoryRig>();
+            if (rig != null)
+            {
+                foreach (var placed in rig.Items)
+                    data.accessories.Add(placed.Entry.Clone());
+            }
+            return data;
         }
     }
 }

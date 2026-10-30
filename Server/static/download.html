@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>색칠 앱 받기</title>
+<style>
+  :root { --ink: #1f2430; --quiet: #5b6475; --accent: #2f6fed; --good: #2e9e5b; --bad: #d93a3a; --line: #d7dce5; --bg: #f3f5f9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Pretendard", "Malgun Gothic", sans-serif; background: var(--bg); color: var(--ink); }
+  main { max-width: 680px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 28px; margin: 8px 0 4px; }
+  p.lead { color: var(--quiet); margin: 0 0 24px; font-size: 17px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; font-size: 18px; margin-bottom: 10px; }
+  .ids { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .ids a { display: flex; align-items: center; justify-content: center; height: 56px; font-size: 22px; font-weight: 700;
+           border-radius: 12px; border: 1px solid var(--line); background: #fff; color: var(--ink); text-decoration: none; }
+  .ids a:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .other { display: flex; gap: 8px; margin-top: 12px; }
+  .other input { flex: 1; height: 48px; font-size: 18px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; }
+  .other button { height: 48px; padding: 0 20px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-size: 18px; font-weight: 700; }
+  #info { font-size: 17px; }
+  #info.bad, .warn { color: var(--bad); }
+  ol { margin: 0; padding-left: 22px; font-size: 17px; line-height: 1.7; }
+  .quiet { color: var(--quiet); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>색칠 앱 받기</h1>
+  <p class="lead">이 PC의 번호를 누르면 번호와 서버 주소가 미리 설정된 색칠 앱(zip)을 받습니다.</p>
+
+  <section>
+    <div id="info" class="quiet">빌드 확인 중…</div>
+    <p id="localhost" class="warn hidden">지금 이 주소(localhost)로 받으면 학생 PC에서 서버를 찾지 못합니다. 학생 PC에서 서버 IP 주소(예: http://192.168.0.10:8081/download)로 여세요.</p>
+  </section>
+
+  <section id="pick">
+    <label>이 PC 번호 (= Quest 번호)</label>
+    <div class="ids" id="ids"></div>
+    <div class="other">
+      <input id="otherId" type="number" min="1" max="99" placeholder="다른 번호 (1~99)">
+      <button id="otherGo" type="button">받기</button>
+    </div>
+  </section>
+
+  <section>
+    <label>받은 뒤</label>
+    <ol>
+      <li>브라우저가 "안전하지 않은 다운로드"라고 막으면 <b>유지</b>(또는 계속)를 누릅니다.</li>
+      <li>받은 zip을 오른쪽 클릭 → <b>압축 풀기</b>. 바탕 화면 같은 곳에 풉니다 (zip 안에서 바로 실행하면 안 됩니다).</li>
+      <li><b>PaintApp\PaintApp.exe</b>를 실행합니다. "Windows의 PC 보호" 창이 뜨면 <b>추가 정보 → 실행</b>.</li>
+      <li>방화벽 창이 뜨면 <b>허용</b>. 왼쪽 위 학생 번호, 오른쪽 위 초록색 '연결됨'이 보이면 준비 완료입니다.</li>
+    </ol>
+  </section>
+</main>
+<script>
+  const ids = document.getElementById("ids");
+  const href = n => `/download/PaintApp_${n}.zip`;
+  for (let n = 1; n <= 20; n++) {
+    const a = document.createElement("a");
+    a.href = href(n);
+    a.textContent = n;
+    ids.appendChild(a);
+  }
+  document.getElementById("otherGo").onclick = () => {
+    const n = parseInt(document.getElementById("otherId").value, 10);
+    if (n >= 1 && n <= 99) location.href = href(n);
+  };
+
+  if (["localhost", "127.0.0.1", "[::1]"].includes(location.hostname))
+    document.getElementById("localhost").classList.remove("hidden");
+
+  fetch("/api/paintapp").then(r => r.json()).then(info => {
+    const el = document.getElementById("info");
+    if (!info.available) {
+      el.textContent = "서버에 색칠 앱 빌드가 없습니다. 운영 PC에서 3D_Paninting의 Tools/Build/Paint App (Windows)를 먼저 실행하세요.";
+      el.className = "bad";
+      document.getElementById("pick").classList.add("hidden");
+      return;
+    }
+    el.textContent = `약 ${info.sizeMB} MB · 빌드 ${new Date(info.builtAt).toLocaleString("ko-KR")} · 서버 ${location.origin}`;
+  }).catch(() => {
+    document.getElementById("info").textContent = "서버 정보를 읽지 못했습니다.";
+  });
+</script>
+</body>
+</html>

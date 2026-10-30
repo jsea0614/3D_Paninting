@@ -13,7 +13,7 @@ namespace Wonju.PaintApp
     public class AppConfig
     {
         public const string FileName = "config.json";
-        public string serverUrl = "http://127.0.0.1:8000";
+        public string serverUrl = "http://127.0.0.1:8081";
         public string studentId = "";
         public string characterId = "base";
         public float healthCheckSeconds = 10f;

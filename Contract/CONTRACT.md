@@ -1,6 +1,6 @@
 # 캐릭터 데이터 규약 (페인팅 툴 ↔ Quest 앱)
 
-Quest 개발팀이 보낸 규약을 기준으로, 두 팀이 답을 맞춘 내용을 덧붙인 정본입니다. 바뀌면 이 파일과 `samples/`, 양쪽 검증 코드를 함께 고칩니다.
+색칠 앱(이 저장소)과 Quest VR 앱(저장소 `JobExperienceWorld`)이 함께 지키는 규약의 정본입니다. 바뀌면 이 파일과 `samples/`, 양쪽 검증 코드(C# 공유 패키지, `Server/contract.py`)를 함께 고치고, VR 앱과 색칠 앱 모두에서 확인합니다.
 
 - C# 기준 구현: `Packages/com.wonju.character-shared/Runtime/Contract/` (`CharacterData`, `CharacterContract`)
 - Python 기준 구현: `Server/contract.py`
@@ -51,19 +51,18 @@ Quest 개발팀이 보낸 규약을 기준으로, 두 팀이 답을 맞춘 내�
 
 서버는 여기에 더해, 서버에 등록되지 않았거나 다른 학생이 올린 스캔을 가리키는 장식을 1단계에서 버린다 (`UnknownScan`). 스캔 GLB는 변환 후 경량화 기준을 서버가 다시 검사해 통과한 것만 `scans/`에 등록한다.
 
-## 두 팀이 맞춘 내용
+## 결정 사항
 
 | 질문 | 결정 |
 | --- | --- |
 | 장식은 어디서 붙이나 | PC 색칠 앱에서 붙이고 Quest는 읽기만 |
-| 테스트 서버 | 개발 PC `http://192.168.0.14:8000` |
-| 서버 경로 (제안, 구현됨) | `GET /api/characters` 목록, `/characters/{id}.png`, `/characters/{id}.json`, `/scans/{file}`. 자세한 API는 `Server/README.md` |
-| 다시 보낸 캐릭터 (제안) | 목록의 `version`이 오르면 Quest가 다시 받음. Quest는 5초마다 목록 확인 |
-| 장식 모델·ID 목록 (제안) | 공유 패키지 `com.wonju.character-shared`의 `AccessoryDatabase`를 두 앱이 함께 사용 |
-| 붙일 수 있는 본 (제안) | `Head`, `Chest`, `Hips`, `Left_Hand_Socket`, `Right_Hand_Socket` |
-| 캐릭터 크기 (제안) | VR에서는 루트 스케일로 키우고, 본 기준 값은 그대로 |
-
-`(제안)`은 Quest 팀 확인을 기다리는 항목입니다.
+| 서버 주소 | 포트 8081. 개발 PC `http://127.0.0.1:8081`, 행사 운영 PC `http://192.168.0.10:8081` |
+| 서버 경로 | `POST /api/character` 업로드, `GET /api/characters` 목록, `/characters/{id}.png`, `/characters/{id}.json`, `/scans/{file}`. 자세한 API는 `Server/README.md` |
+| 다시 보낸 캐릭터 | 목록의 `version`이 오르면 Quest가 다시 받음. Quest는 5초마다 목록 확인 (VR 앱 구현됨) |
+| 장식 모델·ID 목록 | 공유 패키지 `com.wonju.character-shared`의 `AccessoryDatabase`를 두 앱이 함께 사용 (VR 앱은 `file:` 경로로 이 패키지를 참조) |
+| 붙일 수 있는 본 | `Head`, `Chest`, `Hips`, `Left_Hand_Socket`, `Right_Hand_Socket` |
+| 캐릭터 크기 | VR에서는 루트 스케일로 키우고, 본 기준 값은 그대로 (VR 앱 `AvatarBody`가 머리 높이에 맞춰 조절) |
+| 별명 | 색칠 앱 보내기 창에서 입력 (1~8자), 비우면 `{id}번` |
 
 ## 기본 장식 ID
 

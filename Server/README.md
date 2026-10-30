@@ -2,6 +2,8 @@
 
 학생 PC 색칠 앱이 캐릭터(PNG + JSON)를, iPad가 스캔 파일을 올리고, Quest 앱이 같은 Wi-Fi에서 받아 가는 서버입니다. 인터넷 연결이 필요 없습니다. 데이터 규약: [../Contract/CONTRACT.md](../Contract/CONTRACT.md)
 
+운영 PC에서는 VR 저장소(`JobExperienceWorld`)의 Unity 메뉴 **Tools > Server > Server Control** 창으로 설치·실행·중지할 수도 있습니다 (이 폴더를 서버 폴더로 지정).
+
 ## 설치와 실행
 
 1. [uv](https://docs.astral.sh/uv/)와 Blender(4.2 LTS 이상, 5.2 LTS에서 확인)를 설치합니다. Blender는 스캔 변환에만 씁니다.
@@ -9,13 +11,14 @@
    ```
    cd Server
    uv sync
-   uv run main.py --port 8000
+   uv run main.py --port 8081
    ```
    Blender는 환경 변수 `BLENDER` → `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe` → PATH 순서로 찾고, `--blender <경로>`로 지정할 수도 있습니다. 시작 로그 첫 줄에 쓰는 Blender 경로가 나옵니다.
 
-- 같은 네트워크의 기기는 `http://<운영 PC IP>:8000`으로 접속합니다. 처음 실행할 때 Windows 방화벽 창이 뜨면 **개인 네트워크**를 허용합니다.
+- 같은 네트워크의 기기는 `http://<운영 PC IP>:8081`으로 접속합니다. 처음 실행할 때 Windows 방화벽 창이 뜨면 **개인 네트워크**를 허용합니다.
 - 데이터는 `Server/data/`에 저장됩니다(`--data-dir`로 변경). 행사를 새로 시작하려면 서버를 끄고 이 폴더를 지웁니다.
-- iPad는 Safari로 `http://<운영 PC IP>:8000/scan`을 열어 스캔을 올립니다 (홈 화면에 추가해 두면 편함).
+- iPad는 Safari로 `http://<운영 PC IP>:8081/scan`을 열어 스캔을 올립니다 (홈 화면에 추가해 두면 편함).
+- 학생 PC 색칠 앱 설치: 운영 PC에서 `Tools/Build/Paint App (Windows)`로 `Builds/PaintApp`을 만든 뒤(`--paintapp-dir`로 변경), 학생 PC 브라우저로 `http://<운영 PC IP>:8081/download`를 열고 PC 번호를 누릅니다. 받은 zip의 `config.json`에 그 번호와 접속한 서버 주소가 들어 있어 압축만 풀고 실행하면 됩니다. zip은 `data/dist/`에 캐시되고 빌드가 바뀌면 다시 만듭니다 (첫 요청은 압축하느라 수십 초 걸릴 수 있음).
 
 ## API
 
@@ -30,8 +33,13 @@
 | GET | `/scans/{파일}.glb` | 스캔 GLB |
 | GET | `/scan` | iPad용 스캔 업로드 페이지 |
 | GET | `/api/health` | 연결 확인 |
+| POST | `/api/logs` | 기기 로그 JSON (최대 256KB·200개). `data/logs/{device}.log`에 저장, 5MB에서 `.log.1`로 회전 |
+| GET | `/api/logs` | 로그 파일 목록: `devices`의 `device`, `size`, `updatedAt`(UTC) |
+| GET | `/download` | 학생 PC용 색칠 앱 받기 페이지 (PC 번호 버튼) |
+| GET | `/api/paintapp` | 색칠 앱 빌드 정보: `available`, `sizeMB`, `builtAt` |
+| GET | `/download/PaintApp_{n}.zip` | PC 번호 n(1~99)용 색칠 앱. `config.json`의 `studentId`=n, `serverUrl`=요청한 주소. 빌드가 없으면 404 |
 
-이전 API(`POST /api/texture`, `GET /textures/{id}.png`, `GET /api/players`)는 색칠 앱이 `/api/character`로 옮기면 지웁니다.
+이전 API(`POST /api/texture`, `GET /textures/{id}.png`, `GET /api/players`)는 색칠 앱이 `/api/character`로 옮겼으므로 지울 예정입니다 (`load_test.py`를 새 API로 바꾼 뒤).
 
 ### 검사 규칙
 

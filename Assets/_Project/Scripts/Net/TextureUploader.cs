@@ -4,15 +4,31 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEngine.Networking;
+using Wonju.CharacterShared;
 
 namespace Wonju.PaintApp
 {
     /// <summary>
-    /// 텍스처 PNG를 운영 PC 서버(POST /api/texture)로 올립니다.
+    /// 캐릭터(텍스처 PNG + 규약 JSON)를 운영 PC 서버(POST /api/character)로 올립니다. 규약: Contract/CONTRACT.md
     /// 보내기 전에 로컬 백업을 남기고, 실패하면 간격을 늘려 가며 다시 시도합니다.
     /// </summary>
     public class TextureUploader
     {
+        /// <summary>업로드 결과. Rejected = 서버가 내용을 거절(4xx)해서 다시 보내도 같은 경우.</summary>
+        public readonly struct Result
+        {
+            public readonly bool Ok;
+            public readonly bool Rejected;
+            public readonly string Error;
+
+            public Result(bool ok, bool rejected, string error)
+            {
+                Ok = ok;
+                Rejected = rejected;
+                Error = error;
+            }
+        }
+
         readonly AppConfig config;
         readonly int attempts;
         readonly int timeoutSeconds;
@@ -26,40 +42,46 @@ namespace Wonju.PaintApp
 
         public string LastBackupPath { get; private set; }
 
-        /// <summary>업로드 코루틴. 끝나면 onDone(성공 여부, 실패 이유)을 호출합니다.</summary>
-        public IEnumerator Upload(byte[] png, Action<bool, string> onDone)
+        /// <summary>업로드 코루틴. data.id는 업로드 id와 같아야 합니다 (서버가 확인).</summary>
+        public IEnumerator Upload(byte[] png, CharacterData data, Action<Result> onDone)
         {
-            SaveBackup(png);
+            string json = JsonUtility.ToJson(data);
+            SaveBackup(png, json);
 
             string error = null;
             for (int attempt = 1; attempt <= attempts; attempt++)
             {
-                using var request = UnityWebRequest.Post($"{config.serverUrl}/api/texture", new List<IMultipartFormSection>
+                using var request = UnityWebRequest.Post($"{config.serverUrl}/api/character", new List<IMultipartFormSection>
                 {
-                    new MultipartFormDataSection("studentId", config.Id.ToString()),
-                    new MultipartFormDataSection("characterId", config.characterId),
-                    new MultipartFormFileSection("file", png, $"{config.Id}.png", "image/png"),
+                    new MultipartFormDataSection("id", data.id.ToString()),
+                    new MultipartFormDataSection("json", json),
+                    new MultipartFormFileSection("file", png, CharacterData.TextureFileName(data.id), "image/png"),
                 });
                 request.timeout = timeoutSeconds;
                 yield return request.SendWebRequest();
 
                 if (request.result == UnityWebRequest.Result.Success)
                 {
-                    Debug.Log($"[Upload] 학생 {config.Id} 업로드 성공 ({png.Length / 1024} KB): {request.downloadHandler.text}");
-                    onDone(true, null);
+                    // 응답의 warnings = 서버가 규약에 맞지 않아 버린 장식
+                    Debug.Log($"[Upload] 캐릭터 {data.id} 업로드 성공 ({png.Length / 1024} KB): {request.downloadHandler.text}");
+                    onDone(new Result(true, false, null));
                     yield break;
                 }
 
                 error = request.responseCode > 0 ? $"HTTP {request.responseCode} {request.downloadHandler?.text}" : request.error;
                 Debug.LogWarning($"[Upload] {attempt}/{attempts}번째 시도 실패: {error}");
                 // 서버가 요청 자체를 거절(4xx)했으면 다시 보내도 같으므로 멈춥니다.
-                if (request.responseCode is >= 400 and < 500) break;
+                if (request.responseCode is >= 400 and < 500)
+                {
+                    onDone(new Result(false, true, error));
+                    yield break;
+                }
                 if (attempt < attempts) yield return new WaitForSecondsRealtime(attempt);
             }
-            onDone(false, error);
+            onDone(new Result(false, false, error));
         }
 
-        void SaveBackup(byte[] png)
+        void SaveBackup(byte[] png, string json)
         {
             try
             {
@@ -67,6 +89,7 @@ namespace Wonju.PaintApp
                 string id = config.HasValidStudentId ? config.Id.ToString() : "unknown";
                 LastBackupPath = Path.Combine(config.BackupPath, $"student{id}_{DateTime.Now:yyyyMMdd_HHmmss}.png");
                 File.WriteAllBytes(LastBackupPath, png);
+                File.WriteAllText(Path.ChangeExtension(LastBackupPath, ".json"), json);
             }
             catch (Exception e)
             {

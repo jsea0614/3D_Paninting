@@ -1,7 +1,7 @@
 """행사 상황 부하 시험: 학생 PC 20대가 동시에 업로드하고, 그동안 Quest 20대가 목록·텍스처를 받아 갑니다.
 
     uv run load_test.py                         # 로컬 서버
-    uv run load_test.py --server http://192.168.0.10:8000 --rounds 3
+    uv run load_test.py --server http://192.168.0.10:8081 --rounds 3
 
 학생 번호는 LT01~LT20을 써서 실제 학생 데이터와 섞이지 않게 합니다. 끝나면 결과 표를 출력합니다.
 """
@@ -83,7 +83,7 @@ def summarize(name: str, times: list[float]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--server", default="http://127.0.0.1:8000")
+    parser.add_argument("--server", default="http://127.0.0.1:8081")
     parser.add_argument("--students", type=int, default=20)
     parser.add_argument("--rounds", type=int, default=3, help="학생마다 다시 보내는 횟수")
     args = parser.parse_args()

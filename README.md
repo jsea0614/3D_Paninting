@@ -1,6 +1,8 @@
 # 3D 색칠하기 (원주시 직업체험 PC 색칠 앱)
 
-학생이 PC에서 3D 캐릭터를 마우스로 돌려 가며 칠하고, 완료하면 운영 PC 서버로 텍스처 PNG를 보냅니다. Quest 앱은 같은 서버에서 그 PNG를 받아 아바타에 입힙니다.
+학생이 PC에서 3D 캐릭터를 마우스로 돌려 가며 칠하고, 완료하면 운영 PC 서버로 캐릭터(텍스처 PNG + 별명·장식 JSON)를 보냅니다. Quest 앱은 같은 서버에서 받아 아바타에 입힙니다.
+
+Quest VR 앱은 같은 담당자의 저장소 `JobExperienceWorld`이며, 두 저장소를 같은 폴더에 나란히 둡니다 (VR 앱이 `Packages/com.wonju.character-shared`를 `file:` 경로로 참조하고, VR 저장소의 서버 컨트롤 창이 `Server/`를 실행).
 
 | 위치 | 내용 |
 | --- | --- |
@@ -20,7 +22,7 @@
 1. Unity 메뉴 **Tools > Build > Paint App (Windows)** → `Builds/PaintApp/`
 2. 폴더째 각 PC에 복사하고 `config.json`의 `studentId`를 Quest 번호와 같게 바꿉니다. 자세한 내용은 빌드 폴더의 `사용법.txt`
 3. 운영자 단축키: `Ctrl+Shift+R` 회차 초기화, `Ctrl+Shift+Q` 종료
-4. 행사 전 부하 확인: 운영 PC에서 서버를 켜고 `cd Server && uv run load_test.py --server http://<운영 PC IP>:8000`
+4. 행사 전 부하 확인: 운영 PC에서 서버를 켜고 `cd Server && uv run load_test.py --server http://<운영 PC IP>:8081`
 
 ## 실제 베이스 캐릭터로 바꾸기
 
