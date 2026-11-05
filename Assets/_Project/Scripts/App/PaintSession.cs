@@ -16,6 +16,9 @@ namespace Wonju.PaintApp
         [SerializeField] PaintTools tools;
         [SerializeField] OrbitCamera orbit;
         [SerializeField] PaintUI ui;
+        [SerializeField] private ScanLibrary _scans;
+        [SerializeField] private AccessoryRig _rig;
+        [SerializeField] private DecorateController _decorate;
 
         readonly InputAction resetKey = new("ResetRound", InputActionType.Button, "<Keyboard>/r");
         readonly InputAction quitKey = new("Quit", InputActionType.Button, "<Keyboard>/q");
@@ -55,6 +58,11 @@ namespace Wonju.PaintApp
 
         void Start()
         {
+            if (_scans != null)
+            {
+                if (_rig != null) _rig.ScanResolver = _scans.Resolve;
+                _scans.Begin(config);
+            }
             ui.SetStudent(config.HasValidStudentId ? config.Id.ToString() : null);
             ui.SubmitRequested += Submit;
             status.Changed += connected => ui.SetConnection(connected);
@@ -74,6 +82,7 @@ namespace Wonju.PaintApp
         {
             if (uploading) return;
             controller.ResetSession();
+            if (_decorate != null) _decorate.ResetSession();
             tools.ResetToDefaults();
             orbit.ResetView();
             ui.ResetRound();

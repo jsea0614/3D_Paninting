@@ -154,6 +154,9 @@ MonoBehaviour:
   orbit: {fileID: 527965884}
   character: {fileID: 952526888}
   headlight: {fileID: 588941238}
+  _rig: {fileID: 820058543}
+  _decorate: {fileID: 820058541}
+  _scans: {fileID: 820058540}
   regularFont: {fileID: 12800000, guid: 6718fb283ec2a154aa78b5e7304f53b6, type: 3}
   semiBoldFont: {fileID: 12800000, guid: dc75d41cd86a19241bc269534fe8fb42, type: 3}
   roundSprite: {fileID: 21300000, guid: 4487be8329b60844782ad1d803616393, type: 3}
@@ -205,6 +208,9 @@ MonoBehaviour:
   tools: {fileID: 1242474669}
   orbit: {fileID: 527965884}
   ui: {fileID: 331545816}
+  _scans: {fileID: 820058540}
+  _rig: {fileID: 820058543}
+  _decorate: {fileID: 820058541}
 --- !u!1 &527965880
 GameObject:
   m_ObjectHideFlags: 0
@@ -450,6 +456,108 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 50, y: -30, z: 0}
+--- !u!1 &820058539
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 820058544}
+  - component: {fileID: 820058543}
+  - component: {fileID: 820058542}
+  - component: {fileID: 820058541}
+  - component: {fileID: 820058540}
+  m_Layer: 0
+  m_Name: Decorate
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &820058540
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 820058539}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7c5a4ea75a10acf41aa5f2688b4c5e85, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Wonju.PaintApp::Wonju.PaintApp.ScanLibrary
+  _scanShader: {fileID: 4800000, guid: 8d2bb70cbf9db8d4da26e15b26e74248, type: 3}
+  _pollSeconds: 5
+--- !u!114 &820058541
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 820058539}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1ccfb0595142ab44ea480e630d76af10, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Wonju.PaintApp::Wonju.PaintApp.DecorateController
+  rig: {fileID: 820058543}
+  canvas: {fileID: 1242474666}
+  viewCamera: {fileID: 527965882}
+  orbit: {fileID: 527965884}
+  outline: {fileID: 820058542}
+  dragThreshold: 4
+  undoSteps: 30
+--- !u!114 &820058542
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 820058539}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb9150b9074fd9419400833bbf03dbe, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Wonju.PaintApp::Wonju.PaintApp.SelectionOutline
+  rig: {fileID: 820058543}
+  shader: {fileID: 4800000, guid: 542fc6c0df21fc2458f28aaa5d21caaa, type: 3}
+  width: 0.004
+  validColor: {r: 0.18, g: 0.44, b: 0.93, a: 1}
+  invalidColor: {r: 0.85, g: 0.23, b: 0.23, a: 1}
+--- !u!114 &820058543
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 820058539}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7ae90b2588475eb438726f2551e5252b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Wonju.PaintApp::Wonju.PaintApp.AccessoryRig
+  database: {fileID: 11400000, guid: 7ce6bd940c078394ba0b46bce2624935, type: 2}
+  characterRoot: {fileID: 952526889}
+  canvas: {fileID: 1242474666}
+  scanDefaultLength: 0.15
+  scanChestPosition: {x: 0, y: 0.06, z: 0.13}
+--- !u!4 &820058544
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 820058539}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &952526887
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -510,6 +618,11 @@ PrefabInstance:
 --- !u!137 &952526888 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 7570465981896203843, guid: e9ad403a069e08b49b0025e74b91d22f, type: 3}
+  m_PrefabInstance: {fileID: 952526887}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &952526889 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 4828579332158641025, guid: e9ad403a069e08b49b0025e74b91d22f, type: 3}
   m_PrefabInstance: {fileID: 952526887}
   m_PrefabAsset: {fileID: 0}
 --- !u!1 &1242474664
@@ -631,3 +744,4 @@ SceneRoots:
   - {fileID: 952526887}
   - {fileID: 1242474667}
   - {fileID: 331545817}
+  - {fileID: 820058544}

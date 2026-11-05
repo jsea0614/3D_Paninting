@@ -32,6 +32,9 @@ namespace Wonju.PaintApp.UI
         [SerializeField] OrbitCamera orbit;
         [SerializeField] Renderer character;
         [SerializeField] Light headlight;
+        [SerializeField] private AccessoryRig _rig;
+        [SerializeField] private DecorateController _decorate;
+        [SerializeField] private ScanLibrary _scans;
 
         [Header("에셋")]
         [SerializeField] Font regularFont;
@@ -57,6 +60,12 @@ namespace Wonju.PaintApp.UI
         RectTransform toast;
         Text toastText;
         float toastHideAt;
+        RectTransform _palette, _drawer, _drawerContent, _selectionBar, _toolDivider;
+        IconButton _paintModeButton, _decorateModeButton, _builtinTab, _scanTab, _smallerButton, _biggerButton;
+        Text _drawerMessage;
+        readonly List<IconButton> _drawerButtons = new();
+        bool _decorating, _scanTabOpen;
+        bool _inputEnabled = true;
 
         /// <summary>완료 창에서 [보내기]를 눌렀을 때. 받는 쪽이 업로드 후 Dialog.ShowSuccess/ShowFailure를 호출합니다.</summary>
         public event Action<SubmitDialog> SubmitRequested;
@@ -72,6 +81,8 @@ namespace Wonju.PaintApp.UI
             BuildToolbar(canvas);
             BuildPalette(canvas);
             BuildViewControls(canvas);
+            BuildDrawer(canvas);
+            BuildSelectionBar(canvas);
 
             frontPreview = new RenderTexture(488, 540, 24) { name = "SubmitPreviewFront", antiAliasing = 4 };
             backPreview = new RenderTexture(488, 540, 24) { name = "SubmitPreviewBack", antiAliasing = 4 };
@@ -88,12 +99,17 @@ namespace Wonju.PaintApp.UI
 
             SetStudent(null);
             SetConnection(null);
+            SetMode(false);
         }
 
         void OnEnable()
         {
             tools.Changed += RefreshTools;
             controller.HistoryChanged += RefreshHistory;
+            if (_decorate != null) _decorate.HistoryChanged += RefreshHistory;
+            if (_rig != null) _rig.Changed += RefreshDecorations;
+            if (_scans != null) _scans.Changed += RebuildDrawer;
+            RebuildDrawer();
             RefreshTools();
             RefreshHistory();
         }
@@ -102,6 +118,9 @@ namespace Wonju.PaintApp.UI
         {
             tools.Changed -= RefreshTools;
             controller.HistoryChanged -= RefreshHistory;
+            if (_decorate != null) _decorate.HistoryChanged -= RefreshHistory;
+            if (_rig != null) _rig.Changed -= RefreshDecorations;
+            if (_scans != null) _scans.Changed -= RebuildDrawer;
         }
 
         void OnDestroy()
@@ -134,6 +153,7 @@ namespace Wonju.PaintApp.UI
             doneButton.SetLabel("완료");
             if (dialog.IsOpen) dialog.Close();
             dialog.ClearNickName();
+            SetMode(false);
             ShowToast("새 회차를 시작했어요");
         }
 
@@ -204,6 +224,10 @@ namespace Wonju.PaintApp.UI
             var bar = UIFactory.Rect("Toolbar", canvas, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(24f, 0f), new Vector2(width, 588f));
             ui.RoundedImage(bar, UIStyle.Panel, 20f);
             float y = -pad;
+            _paintModeButton = TextButton(UIFactory.Rect("PaintMode", bar, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, y), new Vector2(inner, 44f)), "색칠", () => SetMode(false));
+            y -= 52f;
+            _decorateModeButton = TextButton(UIFactory.Rect("DecorateMode", bar, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, y), new Vector2(inner, 44f)), "꾸미기", () => SetMode(true));
+            y -= 60f;
 
             (PaintTool tool, Sprite icon, string label, string tip)[] items =
             {
@@ -224,6 +248,7 @@ namespace Wonju.PaintApp.UI
             y -= 8f;
             var divider = UIFactory.Rect("Divider", bar, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, y), new Vector2(inner - 8f, 2f));
             divider.gameObject.AddComponent<Image>().color = UIStyle.Border;
+            _toolDivider = divider;
             y -= 2f + 14f;
 
             sizeRow = UIFactory.Rect("Sizes", bar, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, y), new Vector2(inner, 32f));
@@ -245,10 +270,10 @@ namespace Wonju.PaintApp.UI
             y -= 32f + 16f;
 
             undoButton = ToolButton(bar, icons.undo, "되돌리기", "되돌리기 (Ctrl+Z)", y, inner, 64f, 28f);
-            undoButton.Clicked += controller.Undo;
+            undoButton.Clicked += () => { if (_decorating) _decorate.Undo(); else controller.Undo(); };
             y -= 64f + 8f;
             redoButton = ToolButton(bar, icons.redo, "다시하기", "다시하기 (Ctrl+Y)", y, inner, 64f, 28f);
-            redoButton.Clicked += controller.Redo;
+            redoButton.Clicked += () => { if (_decorating) _decorate.Redo(); else controller.Redo(); };
             y -= 64f + pad;
 
             bar.sizeDelta = new Vector2(width, -y);
@@ -272,6 +297,7 @@ namespace Wonju.PaintApp.UI
             float width = pad + current + 16f + 12 * swatch + 11 * gap + pad;
             float height = pad + 2 * swatch + gap + pad;
             var bar = UIFactory.Rect("Palette", canvas, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 24f), new Vector2(width, height));
+            _palette = bar;
             ui.RoundedImage(bar, UIStyle.Panel, 20f);
 
             var currentRect = UIFactory.Rect("Current", bar, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(pad, 0f), new Vector2(current, current));
@@ -297,6 +323,161 @@ namespace Wonju.PaintApp.UI
                 fill.raycastTarget = true;
                 swatches.Add((color, outline));
             }
+        }
+
+        IconButton TextButton(RectTransform rect, string text, Action clicked)
+        {
+            var background = ui.RoundedImage(rect, Color.clear, 12f);
+            var label = ui.Label(UIFactory.Stretch("Label", rect), text, 18, false, UIStyle.Ink);
+            var button = rect.gameObject.AddComponent<IconButton>();
+            button.Init(background, null, label, text);
+            button.Clicked += clicked;
+            return button;
+        }
+
+        void BuildDrawer(Transform canvas)
+        {
+            _drawer = UIFactory.Rect("DecorateDrawer", canvas, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-24f, -112f), new Vector2(320f, 640f));
+            ui.RoundedImage(_drawer, UIStyle.Panel, 20f);
+            _builtinTab = TextButton(UIFactory.Rect("BuiltinTab", _drawer, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(12f, -12f), new Vector2(144f, 44f)), "장식", () => SetDrawerTab(false));
+            _scanTab = TextButton(UIFactory.Rect("ScanTab", _drawer, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-12f, -12f), new Vector2(144f, 44f)), "스캔", () => SetDrawerTab(true));
+            _drawerMessage = ui.Label(UIFactory.Rect("Message", _drawer, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 8f), new Vector2(300f, 44f)), "", 18, false, UIStyle.Quiet);
+
+            var viewport = UIFactory.Stretch("Viewport", _drawer);
+            viewport.offsetMin = new Vector2(12f, 60f);
+            viewport.offsetMax = new Vector2(-12f, -68f);
+            viewport.gameObject.AddComponent<Image>().color = Color.clear;
+            viewport.gameObject.AddComponent<RectMask2D>();
+            _drawerContent = UIFactory.Rect("Content", viewport, new Vector2(0f, 1f), new Vector2(0f, 1f), Vector2.zero, new Vector2(296f, 0f));
+            var scroll = _drawer.gameObject.AddComponent<ScrollRect>();
+            scroll.viewport = viewport;
+            scroll.content = _drawerContent;
+            scroll.horizontal = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 32f;
+        }
+
+        void SetDrawerTab(bool scan)
+        {
+            _scanTabOpen = scan;
+            RebuildDrawer();
+            _drawerContent.anchoredPosition = Vector2.zero;
+        }
+
+        void RebuildDrawer()
+        {
+            if (_drawerContent == null) return;
+            foreach (Transform child in _drawerContent)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+            _drawerButtons.Clear();
+            _builtinTab.SetSelected(!_scanTabOpen);
+            _scanTab.SetSelected(_scanTabOpen);
+
+            int index = 0;
+            if (_scanTabOpen)
+            {
+                if (_scans != null)
+                    foreach (var item in _scans.Items)
+                    {
+                        var scan = item;
+                        var rect = UIFactory.Rect(scan.ItemId, _drawerContent, new Vector2(0f, 1f), new Vector2(0f, 1f),
+                            new Vector2(8f + index % 3 * 96f, -index / 3 * 124f), new Vector2(88f, 116f));
+                        var background = ui.RoundedImage(rect, UIStyle.Hover, 12f);
+                        var thumbRect = UIFactory.Rect("Thumbnail", rect, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -4f), new Vector2(80f, 80f));
+                        if (scan.Thumb != null)
+                        {
+                            var image = thumbRect.gameObject.AddComponent<RawImage>();
+                            image.texture = scan.Thumb;
+                            image.raycastTarget = false;
+                        }
+                        else
+                        {
+                            ui.Label(thumbRect, string.IsNullOrEmpty(scan.Name) ? "?" : scan.Name.Substring(0, 1), 32, true, UIStyle.Ink);
+                        }
+                        var label = ui.Label(UIFactory.Rect("Name", rect, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 4f), new Vector2(80f, 24f)), scan.Name, 16, false, UIStyle.Ink);
+                        label.horizontalOverflow = HorizontalWrapMode.Wrap;
+                        label.verticalOverflow = VerticalWrapMode.Truncate;
+                        var button = rect.gameObject.AddComponent<IconButton>();
+                        button.Init(background, null, label, scan.Name);
+                        button.Clicked += () => { if (_decorate != null) _decorate.AddScan(scan.ItemId, scan.File, scan.Name, scan.Template); };
+                        _drawerButtons.Add(button);
+                        index++;
+                    }
+                _drawerContent.sizeDelta = new Vector2(296f, Mathf.CeilToInt(index / 3f) * 124f);
+            }
+            else
+            {
+                if (_rig != null && _rig.Database != null)
+                    foreach (var definition in _rig.Database.Items)
+                    {
+                        if (definition == null) continue;
+                        var entry = definition;
+                        var rect = UIFactory.Rect(entry.itemId, _drawerContent, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, -index * 64f), new Vector2(296f, 56f));
+                        var background = ui.RoundedImage(rect, Color.clear, 12f);
+                        var icon = UIFactory.IconImage(UIFactory.Rect("Icon", rect, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(12f, 0f), new Vector2(40f, 40f)), entry.icon, UIStyle.Ink);
+                        var label = ui.Label(UIFactory.Rect("Name", rect, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(64f, 0f), new Vector2(220f, 40f)), entry.displayName, 20, false, UIStyle.Ink, TextAnchor.MiddleLeft);
+                        var button = rect.gameObject.AddComponent<IconButton>();
+                        button.Init(background, icon, label, entry.displayName);
+                        button.Clicked += () => { if (_decorate != null) _decorate.AddBuiltin(entry); };
+                        _drawerButtons.Add(button);
+                        index++;
+                    }
+                _drawerContent.sizeDelta = new Vector2(296f, index * 64f);
+            }
+            RefreshDecorations();
+        }
+
+        void BuildSelectionBar(Transform canvas)
+        {
+            _selectionBar = UIFactory.Rect("SelectedAccessory", canvas, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 24f), new Vector2(872f, 80f));
+            ui.RoundedImage(_selectionBar, UIStyle.Panel, 20f);
+            (string label, Action clicked)[] actions =
+            {
+                ("← 돌리기", () => _decorate.RotateSelected(-1, 0)),
+                ("돌리기 →", () => _decorate.RotateSelected(1, 0)),
+                ("기울이기", () => _decorate.RotateSelected(0, 1)),
+                ("작게", () => _decorate.ScaleSelected(-1)),
+                ("크게", () => _decorate.ScaleSelected(1)),
+                ("처음 자리", () => _decorate.ResetSelected()),
+                ("빼기", () => _decorate.RemoveSelected()),
+            };
+            for (int i = 0; i < actions.Length; i++)
+            {
+                var button = TextButton(UIFactory.Rect(actions[i].label, _selectionBar, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(12f + i * 122f, 0f), new Vector2(116f, 56f)), actions[i].label, actions[i].clicked);
+                if (i == 3) _smallerButton = button;
+                if (i == 4) _biggerButton = button;
+            }
+        }
+
+        void SetMode(bool decorating)
+        {
+            _decorating = decorating && _decorate != null && _rig != null;
+            _paintModeButton.SetSelected(!_decorating);
+            _decorateModeButton.SetSelected(_decorating);
+            _decorateModeButton.SetInteractable(_decorate != null && _rig != null);
+            foreach (var button in toolButtons.Values) button.gameObject.SetActive(!_decorating);
+            _toolDivider.gameObject.SetActive(!_decorating);
+            _palette.gameObject.SetActive(!_decorating);
+            _drawer.gameObject.SetActive(_decorating);
+            SetPaintingEnabled(_inputEnabled);
+            RefreshTools();
+            RefreshDecorations();
+        }
+
+        void RefreshDecorations()
+        {
+            bool canAdd = _rig != null && _decorate != null && _rig.CanAdd(_scanTabOpen);
+            foreach (var button in _drawerButtons) button.SetInteractable(canAdd);
+            _drawerMessage.text = _rig != null && !_rig.CanAdd(false) ? "장식은 5개까지"
+                : _scanTabOpen && _rig != null && !_rig.CanAdd(true) ? "스캔은 2개까지"
+                : _scanTabOpen && (_scans == null || _scans.Items.Count == 0) ? "아직 스캔한 물건이 없어요" : "";
+            var selected = _rig != null ? _rig.Selected : null;
+            _selectionBar.gameObject.SetActive(_decorating && selected != null);
+            _smallerButton.SetInteractable(selected != null && _rig.CanScale(selected, -1));
+            _biggerButton.SetInteractable(selected != null && _rig.CanScale(selected, 1));
         }
 
         void BuildViewControls(Transform canvas)
@@ -335,7 +516,7 @@ namespace Wonju.PaintApp.UI
                 pair.Value.SetSelected(pair.Key == tools.Tool);
 
             bool sized = tools.Tool is PaintTool.Brush or PaintTool.Eraser;
-            sizeRow.gameObject.SetActive(sized);
+            sizeRow.gameObject.SetActive(!_decorating && sized);
             for (int i = 0; i < sizeButtons.Count; i++)
                 sizeButtons[i].SetSelected(i == tools.SizeIndex);
 
@@ -346,8 +527,8 @@ namespace Wonju.PaintApp.UI
 
         void RefreshHistory()
         {
-            undoButton.SetInteractable(controller.CanUndo);
-            redoButton.SetInteractable(controller.CanRedo);
+            undoButton.SetInteractable(_inputEnabled && (_decorating ? _decorate != null && _decorate.CanUndo : controller.CanUndo));
+            redoButton.SetInteractable(_inputEnabled && (_decorating ? _decorate != null && _decorate.CanRedo : controller.CanRedo));
         }
 
         static bool SameColor(Color a, Color b) =>
@@ -376,9 +557,12 @@ namespace Wonju.PaintApp.UI
 
         void SetPaintingEnabled(bool value)
         {
-            controller.InputEnabled = value;
-            tools.ShortcutsEnabled = value;
+            _inputEnabled = value;
+            controller.InputEnabled = value && !_decorating;
+            tools.ShortcutsEnabled = value && !_decorating;
+            if (_decorate != null) _decorate.InputEnabled = value && _decorating;
             orbit.enabled = value;
+            RefreshHistory();
         }
     }
 }
