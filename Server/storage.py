@@ -95,32 +95,56 @@ class ScanStore:
         self.index: dict[str, dict[str, Any]] = {}
         if self.index_path.exists():
             for entry in json.loads(self.index_path.read_text(encoding="utf-8"))["scans"]:
+                entry.setdefault("name", "스캔")
+                entry.setdefault("thumb", None)
+                entry.pop("owner", None)
                 self.index[entry["itemId"]] = entry
 
-    def add(self, owner: int, glb: bytes, info: dict[str, Any]) -> dict[str, Any]:
+    def add(self, glb: bytes, thumb: bytes | None, info: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             while True:
                 scan_id = secrets.token_hex(4)
                 if f"scan_{scan_id}" not in self.index:
                     break
             (self.dir / f"{scan_id}.glb").write_bytes(glb)
-            entry = {"itemId": f"scan_{scan_id}", "source": "scan", "file": f"scans/{scan_id}.glb", "owner": owner,
+            if thumb is not None:
+                (self.dir / f"{scan_id}.png").write_bytes(thumb)
+            entry = {"itemId": f"scan_{scan_id}", "source": "scan", "file": f"scans/{scan_id}.glb",
+                     "thumb": f"scans/{scan_id}.png" if thumb is not None else None,
                      "createdAt": _now(), **info}
             self.index[entry["itemId"]] = entry
             _write_json_atomic(self.index_path, {"scans": list(self.index.values())})
             return entry
 
-    def list(self, owner: int | None = None) -> list[dict[str, Any]]:
-        scans = [e for e in self.index.values() if owner is None or e["owner"] == owner]
-        return sorted(scans, key=lambda e: e["createdAt"])
+    def list(self) -> list[dict[str, Any]]:
+        with self.lock:
+            return sorted(self.index.values(), key=lambda e: e["createdAt"])
 
-    def is_registered_for(self, owner: int, entry: dict[str, Any]) -> bool:
-        """JSON의 스캔 장식이 이 학생이 올려 등록된 스캔을 가리키는지."""
-        scan = self.index.get(entry.get("itemId", ""))
-        return scan is not None and scan["owner"] == owner and scan["file"] == entry.get("file")
+    def is_registered(self, entry: dict[str, Any]) -> bool:
+        """JSON의 스캔 장식이 공유 라이브러리에 등록된 스캔을 가리키는지."""
+        with self.lock:
+            scan = self.index.get(entry.get("itemId", ""))
+            return scan is not None and scan["file"] == entry.get("file")
+
+    def remove(self, item_id: str) -> bool:
+        with self.lock:
+            entry = self.index.get(item_id)
+            if entry is None:
+                return False
+            for key in ("file", "thumb"):
+                if entry.get(key):
+                    path = self.dir / Path(entry[key]).name
+                    path.unlink(missing_ok=True)
+            del self.index[item_id]
+            _write_json_atomic(self.index_path, {"scans": list(self.index.values())})
+            return True
 
     def read(self, file_name: str) -> bytes | None:
         path = self.dir / file_name
-        if path.parent != self.dir or path.suffix != ".glb" or not path.exists():
+        if path.parent != self.dir or path.suffix not in {".glb", ".png"}:
             return None
-        return path.read_bytes()
+        with self.lock:
+            try:
+                return path.read_bytes()
+            except FileNotFoundError:
+                return None

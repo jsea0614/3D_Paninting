@@ -9,10 +9,11 @@ API (규약)
     POST /api/character              multipart: id, json(문자열), file(PNG 1024 또는 2048)
     GET  /api/characters             캐릭터 목록 (id, name, version, png, json URL)
     GET  /characters/{id}.png|.json  최신 파일
-    POST /api/scans                  multipart: id(소유 학생), file(.usdz .glb .obj .fbx 등) → 변환 작업
+    POST /api/scans                  multipart: name(1~12자), file(.usdz .glb .obj .fbx 등) → 변환 작업
     GET  /api/scans/jobs/{jobId}     변환 작업 상태 (queued, converting, done, failed)
-    GET  /api/scans?owner={id}       등록된 스캔 목록
-    GET  /scans/{file}.glb           스캔 GLB
+    GET  /api/scans                  공유 스캔 목록, max, canManage
+    DELETE /api/scans/{itemId}       서버 PC에서 스캔 삭제
+    GET  /scans/{file}.glb|.png      스캔 GLB·썸네일
     GET  /scan                       iPad용 스캔 업로드 페이지
     GET  /api/health                 연결 확인
     POST /api/logs                   기기 로그 수집 (JSON, 최대 256KB/200개)
@@ -44,7 +45,7 @@ from fastapi.responses import FileResponse, Response
 import contract
 from logs import DeviceLogs, MAX_BODY
 from paintapp_dist import PaintAppDist
-from scans import SCAN_EXTENSIONS, Converter, ScanJobs, blender_converter, find_blender
+from scans import MAX_LIBRARY, SCAN_EXTENSIONS, Converter, LibraryFullError, ScanJobs, blender_converter, find_blender
 from storage import CharacterStore, ScanStore
 
 TEXTURE_SIZE = 1024
@@ -215,7 +216,7 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
 
         result = contract.sanitize(
             data, known_items.__contains__, known_bones.__contains__,
-            lambda entry: scan_store.is_registered_for(character_id, entry),
+            lambda entry: scan_store.is_registered(entry),
         )
         header = [i for i in result.issues if i.code in HEADER_ISSUES]
         if header:
@@ -248,18 +249,21 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
     # ───────────────────────── 스캔 ─────────────────────────
 
     @app.post("/api/scans", status_code=202)
-    async def upload_scan(id: Annotated[str, Form()], file: Annotated[UploadFile, File()]):
-        owner = contract.normalize_id(id)
-        if owner is None:
-            raise HTTPException(400, f"id는 1 이상의 정수여야 합니다: {id!r}")
-        name = Path(file.filename or "scan").name
-        if Path(name).suffix.lower() not in SCAN_EXTENSIONS:
+    async def upload_scan(file: Annotated[UploadFile, File()], name: Annotated[str, Form()] = ""):
+        name = name.strip()
+        if not 1 <= len(name) <= 12:
+            raise HTTPException(400, "이름은 앞뒤 공백을 빼고 1~12자로 입력해 주세요.")
+        source_name = Path(file.filename or "scan").name
+        if Path(source_name).suffix.lower() not in SCAN_EXTENSIONS:
             raise HTTPException(400, f"지원하지 않는 형식입니다. ({', '.join(sorted(SCAN_EXTENSIONS))})")
         data = await file.read(MAX_SCAN_UPLOAD_BYTES + 1)
         if len(data) > MAX_SCAN_UPLOAD_BYTES:
             raise HTTPException(413, "스캔 파일이 200MB를 넘습니다.")
-        job = await run_in_threadpool(jobs.submit, owner, name, data)
-        log.info("스캔 접수: 학생 %d, %s (%d KB), 작업 %s", owner, name, len(data) // 1024, job.jobId)
+        try:
+            job = await run_in_threadpool(jobs.submit, name, source_name, data)
+        except LibraryFullError as e:
+            raise HTTPException(409, str(e)) from e
+        log.info("스캔 접수: %s, %s (%d KB), 작업 %s", name, source_name, len(data) // 1024, job.jobId)
         return jobs.get(job.jobId)
 
     @app.get("/api/scans/jobs/{job_id}")
@@ -270,8 +274,19 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
         return job
 
     @app.get("/api/scans")
-    def list_scans(owner: int | None = None):
-        return {"scans": scan_store.list(owner)}
+    def list_scans(request: Request):
+        return {"scans": scan_store.list(), "max": MAX_LIBRARY, "canManage": can_manage_scans(request)}
+
+    def can_manage_scans(request: Request) -> bool:
+        return request.client is not None and request.client.host in {"127.0.0.1", "::1"}
+
+    @app.delete("/api/scans/{item_id}", status_code=204)
+    def delete_scan(item_id: str, request: Request):
+        if not can_manage_scans(request):
+            raise HTTPException(403, "스캔은 서버 PC에서만 지울 수 있습니다.")
+        if not scan_store.remove(item_id):
+            raise HTTPException(404, "스캔이 없습니다.")
+        return Response(status_code=204)
 
     @app.get("/scans/{file_name}")
     def scan_file(file_name: str):
@@ -279,7 +294,8 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
         if data is None:
             raise HTTPException(404, "스캔이 없습니다.")
         # 스캔 파일은 바뀌지 않으므로(ID마다 새 파일) 캐시해도 됩니다.
-        return Response(data, media_type="model/gltf-binary", headers={"Cache-Control": "max-age=86400"})
+        media_type = "image/png" if Path(file_name).suffix == ".png" else "model/gltf-binary"
+        return Response(data, media_type=media_type, headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/scan")
     def scan_page():

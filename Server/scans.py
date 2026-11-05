@@ -28,9 +28,14 @@ log = logging.getLogger("paint-server")
 SCAN_EXTENSIONS = {".glb", ".gltf", ".obj", ".fbx", ".usd", ".usdz", ".usdc", ".usda"}
 DEFAULT_BLENDER = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 CONVERT_SCRIPT = Path(__file__).parent / "tools" / "convert_scan.py"
+MAX_LIBRARY = 40
 
-# (입력 경로, 출력 GLB 경로) → 변환 보고서 dict (convert_scan.py의 보고서 형식)
-Converter = Callable[[Path, Path], dict]
+# (입력 경로, 출력 GLB 경로, 썸네일 PNG 경로) → 변환 보고서 dict
+Converter = Callable[[Path, Path, Path], dict]
+
+
+class LibraryFullError(ValueError):
+    pass
 
 
 def find_blender() -> str:
@@ -43,11 +48,11 @@ def find_blender() -> str:
 
 
 def blender_converter(blender: str, timeout: int = 180) -> Converter:
-    def convert(src: Path, dst: Path) -> dict:
+    def convert(src: Path, dst: Path, thumb: Path) -> dict:
         report_path = dst.with_suffix(".report.json")
         try:
             subprocess.run(
-                [blender, "-b", "--factory-startup", "-P", str(CONVERT_SCRIPT), "--", str(src), str(dst), str(report_path)],
+                [blender, "-b", "--factory-startup", "-P", str(CONVERT_SCRIPT), "--", str(src), str(dst), str(report_path), str(thumb)],
                 capture_output=True, timeout=timeout, check=False,
             )
         except subprocess.TimeoutExpired:
@@ -63,7 +68,7 @@ def blender_converter(blender: str, timeout: int = 180) -> Converter:
 @dataclass
 class Job:
     jobId: str
-    owner: int
+    name: str
     sourceName: str
     status: str = "queued"          # queued → converting → done | failed
     itemId: str | None = None
@@ -83,11 +88,14 @@ class ScanJobs:
         self.queue: queue.Queue[tuple[Job, Path]] = queue.Queue()
         threading.Thread(target=self._run, name="scan-worker", daemon=True).start()
 
-    def submit(self, owner: int, source_name: str, data: bytes) -> Job:
-        job = Job(uuid.uuid4().hex[:12], owner, source_name)
-        src = self.work_dir / f"{job.jobId}{Path(source_name).suffix.lower()}"
-        src.write_bytes(data)
+    def submit(self, name: str, source_name: str, data: bytes) -> Job:
         with self.lock:
+            pending = sum(j.status in {"queued", "converting"} for j in self.jobs.values())
+            if len(self.store.list()) + pending >= MAX_LIBRARY:
+                raise LibraryFullError("스캔 장식이 가득 찼어요 (40개). 안 쓰는 스캔을 지워 주세요.")
+            job = Job(uuid.uuid4().hex[:12], name, source_name)
+            src = self.work_dir / f"{job.jobId}{Path(source_name).suffix.lower()}"
+            src.write_bytes(data)
             self.jobs[job.jobId] = job
         self.queue.put((job, src))
         return job
@@ -120,10 +128,11 @@ class ScanJobs:
             src.unlink(missing_ok=True)
 
     def _convert(self, job: Job, src: Path, dst: Path) -> None:
-        report = self.converter(src, dst)
+        thumb = dst.with_suffix(".png")
+        report = self.converter(src, dst, thumb)
         if not report.get("ok") or not dst.exists():
             self._update(job, status="failed", error=report.get("error") or "변환 실패")
-            log.info("스캔 실패: 학생 %d, %s: %s", job.owner, job.sourceName, job.error)
+            log.info("스캔 실패: %s, %s: %s", job.name, job.sourceName, job.error)
             return
         data = dst.read_bytes()
         try:
@@ -134,15 +143,20 @@ class ScanJobs:
         if not info.ok:
             self._update(job, status="failed", error="경량화 기준 미달: " + "; ".join(info.problems))
             return
-        entry = self.store.add(job.owner, data, {
-            "sourceName": job.sourceName,
-            "triangles": info.triangles,
-            "bytes": info.bytes,
-            "textureSize": list(info.images[0]) if info.images else None,
-            "dimensions": [round(s, 4) for s in info.size],
-        })
-        self._update(job, status="done", itemId=entry["itemId"], file=entry["file"])
-        log.info("스캔 등록: 학생 %d, %s → %s (삼각형 %d, %d KB)", job.owner, job.sourceName, entry["itemId"], info.triangles, info.bytes // 1024)
+        # 접수와 같은 잠금으로 등록·완료를 묶어 상한 계산에서 두 번 세지 않게 합니다.
+        with self.lock:
+            entry = self.store.add(data, thumb.read_bytes() if thumb.exists() else None, {
+                "name": job.name,
+                "sourceName": job.sourceName,
+                "triangles": info.triangles,
+                "bytes": info.bytes,
+                "textureSize": list(info.images[0]) if info.images else None,
+                "dimensions": [round(s, 4) for s in info.size],
+                "cleaning": {key: report.get(key, default) for key, default in
+                             (("removedIslands", 0), ("floorRemoved", False), ("holesFilled", 0))},
+            })
+            job.status, job.itemId, job.file = "done", entry["itemId"], entry["file"]
+        log.info("스캔 등록: %s, %s → %s (삼각형 %d, %d KB)", job.name, job.sourceName, entry["itemId"], info.triangles, info.bytes // 1024)
 
     def _update(self, job: Job, **changes) -> None:
         with self.lock:

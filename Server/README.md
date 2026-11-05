@@ -17,7 +17,8 @@
 
 - 같은 네트워크의 기기는 `http://<운영 PC IP>:8081`으로 접속합니다. 처음 실행할 때 Windows 방화벽 창이 뜨면 **개인 네트워크**를 허용합니다.
 - 데이터는 `Server/data/`에 저장됩니다(`--data-dir`로 변경). 행사를 새로 시작하려면 서버를 끄고 이 폴더를 지웁니다.
-- iPad는 Safari로 `http://<운영 PC IP>:8081/scan`을 열어 스캔을 올립니다 (홈 화면에 추가해 두면 편함).
+- 운영자 폰·iPad는 `http://<운영 PC IP>:8081/scan`을 열고 장식 이름(1~12자)과 스캔 파일을 보냅니다. 모든 학생이 쓰는 공유 라이브러리에 등록됩니다 (홈 화면에 추가해 두면 편함).
+- 스캔을 지울 때는 **서버 PC**에서 `http://127.0.0.1:8081/scan`을 엽니다. 목록의 [지우기]로 GLB·썸네일을 함께 지웁니다. 다른 기기에서는 삭제할 수 없습니다. 등록된 스캔과 대기·변환 중인 작업은 합쳐 최대 40개이며, 가득 차면 안 쓰는 스캔을 지운 뒤 보냅니다.
 - 학생 PC 색칠 앱 설치: 운영 PC에서 `Tools/Build/Paint App (Windows)`로 `Builds/PaintApp`을 만든 뒤(`--paintapp-dir`로 변경), 학생 PC 브라우저로 `http://<운영 PC IP>:8081/download`를 열고 PC 번호를 누릅니다. 받은 zip의 `config.json`에 그 번호와 접속한 서버 주소가 들어 있어 압축만 풀고 실행하면 됩니다. zip은 `data/dist/`에 캐시되고 빌드가 바뀌면 다시 만듭니다 (첫 요청은 압축하느라 수십 초 걸릴 수 있음).
 
 ## API
@@ -27,10 +28,11 @@
 | POST | `/api/character` | multipart: `id`, `json`(규약 JSON 문자열), `file`(PNG 1024 또는 2048). 규약대로 정리해 저장하고 `version`이 1 오름. 응답의 `warnings`에 버린 장식 |
 | GET | `/api/characters` | `{"characters": [{id, name, version, updatedAt, png, json}]}`. `png`·`json` URL에 `?v={version}`이 붙어 Quest가 새 버전을 알 수 있음 |
 | GET | `/characters/{id}.png`, `/characters/{id}.json` | 최신 파일 |
-| POST | `/api/scans` | multipart: `id`(스캔한 학생), `file`(.usdz .usd .glb .gltf .obj .fbx, 200MB 이하) → 202와 변환 작업 |
+| POST | `/api/scans` | multipart: `name`(필수, 앞뒤 공백 제거 후 1~12자), `file`(.usdz .usd .usdc .usda .glb .gltf .obj .fbx, 200MB 이하) → 202와 변환 작업. 잘못된 이름은 400, 라이브러리 상한은 409 |
 | GET | `/api/scans/jobs/{jobId}` | `status`: `queued` → `converting` → `done`(`itemId`, `file`) 또는 `failed`(`error`) |
-| GET | `/api/scans?owner={id}` | 등록된 스캔 목록 (`itemId`, `file`, `triangles`, `bytes`, `textureSize`, `dimensions`) |
-| GET | `/scans/{파일}.glb` | 스캔 GLB |
+| GET | `/api/scans` | `{"scans": [...], "max": 40, "canManage": bool}`. 항목: `itemId`, `source`, `file`, `thumb`(없으면 null), `name`, `createdAt`, `triangles`, `bytes`, `textureSize`, `dimensions`, `cleaning`. `canManage`는 요청 IP가 `127.0.0.1` 또는 `::1`인 경우만 true |
+| DELETE | `/api/scans/{itemId}` | 서버 PC에서만 삭제 (그 외 403), 없으면 404, 성공 204 |
+| GET | `/scans/{파일}.glb`, `/scans/{파일}.png` | GLB(`model/gltf-binary`)·썸네일(`image/png`) |
 | GET | `/scan` | iPad용 스캔 업로드 페이지 |
 | GET | `/api/health` | 연결 확인 |
 | POST | `/api/logs` | 기기 로그 JSON (최대 256KB·200개). `data/logs/{device}.log`에 저장, 5MB에서 `.log.1`로 회전 |
@@ -45,8 +47,9 @@
 
 - 캐릭터: `id`·`name`·`texture`가 규약에 맞지 않으면 400으로 거절합니다. 장식 문제는 그 장식만 버리고 저장하며 `warnings`로 알려 줍니다 (`contract.py`, C#과 같은 규칙).
 - 장식 ID와 본 목록은 Unity가 내보낸 `Contract/item_ids.json`을 씁니다.
-- 스캔 장식은 서버에 등록된, 같은 학생이 올린 스캔만 남깁니다 (`UnknownScan`, 서버에만 있는 규칙).
-- 스캔 변환: `tools/convert_scan.py`(Blender)가 감량·텍스처 1장·크기 정규화를 하고, 서버가 결과 GLB를 `glb.py`로 다시 검사합니다 (삼각형 10,000개, 텍스처 1장 1024px, 5MB, 최대 0.5m, 피벗 중심). 하나라도 어기면 등록하지 않습니다. 변환은 한 번에 하나씩 처리하며 한 건에 2~3초 걸립니다.
+- 스캔 장식은 모든 학생이 공유하며 서버에 등록된 스캔이면 누구나 참조할 수 있습니다. 미등록 스캔은 버립니다 (`UnknownScan`, 서버에만 있는 규칙). 스캔을 지워도 기존 캐릭터 JSON은 바꾸지 않으며 다음 업로드 때 해당 장식을 버립니다. 앱에서 GLB를 못 받으면 그 장식만 건너뜁니다.
+- 스캔 변환: `tools/convert_scan.py`(Blender)가 겹친 정점·미세 면·작은 조각·넓은 바닥 판을 청소하고 작은 구멍을 메운 뒤 감량·텍스처 1장·크기 정규화를 합니다. 서버가 결과 GLB를 `glb.py`로 다시 검사합니다 (삼각형 6,000개, 텍스처 1장 512px, 2MB, 최대 0.5m, 피벗 중심). 하나라도 어기면 등록하지 않습니다. 청소 후 면이 200개 미만이거나 가장 긴 변이 1cm 미만이어도 실패합니다. 변환은 한 번에 하나씩 처리합니다.
+- 256×256 투명 PNG 썸네일도 생성합니다. 썸네일만 실패하면 GLB는 등록하고 `thumb`는 null입니다. 청소 결과는 `cleaning`의 `removedIslands`·`floorRemoved`·`holesFilled`로 확인합니다. 기존 `owner` 항목만 있는 색인은 이름을 "스캔", 썸네일을 null로 읽습니다.
 
 ## 테스트
 
@@ -59,5 +62,5 @@ uv run load_test.py               # 학생 20명 업로드 + Quest 20대 다운�
 
 ```
 blender -b --factory-startup -P tools/make_test_scans.py -- <폴더>      # 시험용 스캔 4종
-blender -b --factory-startup -P tools/convert_scan.py -- <입력> <출력.glb> <보고서.json>
+blender -b --factory-startup -P tools/convert_scan.py -- <입력> <출력.glb> <보고서.json> <썸네일.png>
 ```

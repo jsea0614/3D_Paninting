@@ -1,6 +1,6 @@
 """GLB를 직접 읽어 규약의 경량화 기준을 다시 검사합니다 (Blender 결과를 그대로 믿지 않음).
 
-기준(Contract/CONTRACT.md): 삼각형 10,000개 이하, 텍스처 1장 1024×1024 이하, 5MB 이하,
+기준(Contract/CONTRACT.md): 삼각형 6,000개 이하, 텍스처 1장 512×512 이하, 2MB 이하,
 피벗 = 바운딩박스 중심, 최대 길이 0.5m 이하.
 """
 
@@ -10,9 +10,9 @@ import json
 import struct
 from dataclasses import dataclass, field
 
-MAX_TRIANGLES = 10_000
-MAX_TEXTURE = 1024
-MAX_BYTES = 5 * 1024 * 1024
+MAX_TRIANGLES = 6_000
+MAX_TEXTURE = 512
+MAX_BYTES = 2 * 1024 * 1024
 MAX_LENGTH = 0.5
 CENTER_TOLERANCE = 0.005   # m
 LENGTH_TOLERANCE = 0.001   # m
@@ -79,7 +79,7 @@ def inspect(data: bytes) -> GlbInfo:
 
     info = GlbInfo(len(data), triangles, images, tuple(lo), tuple(hi))
     if info.bytes > MAX_BYTES:
-        info.problems.append(f"파일 {info.bytes / 1048576:.1f}MB > 5MB")
+        info.problems.append(f"파일 {info.bytes / 1048576:.1f}MB > 2MB")
     if triangles > MAX_TRIANGLES:
         info.problems.append(f"삼각형 {triangles}개 > {MAX_TRIANGLES}")
     if len(images) > 1:

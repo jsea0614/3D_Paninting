@@ -28,7 +28,7 @@ BAD_SCALE = "BadScale"
 BAD_SCAN_FILE = "BadScanFile"
 TOO_MANY_SCANS = "TooManyScans"
 TOO_MANY_ACCESSORIES = "TooManyAccessories"
-UNKNOWN_SCAN = "UnknownScan"  # 서버 전용: 등록되지 않았거나 다른 학생의 스캔 (C#에는 없음, Quest는 GLB를 못 받으면 건너뜀)
+UNKNOWN_SCAN = "UnknownScan"  # 서버 전용: 등록되지 않은 스캔 (C#에는 없음, Quest는 GLB를 못 받으면 건너뜀)
 
 
 @dataclass

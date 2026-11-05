@@ -13,18 +13,21 @@
   p.lead { color: var(--quiet); margin: 0 0 24px; font-size: 17px; }
   section { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 16px; }
   label { display: block; font-weight: 600; font-size: 18px; margin-bottom: 10px; }
-  .ids { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-  .ids button { height: 52px; font-size: 20px; border-radius: 12px; border: 1px solid var(--line); background: #fff; color: var(--ink); }
-  .ids button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  input[type=text] { width: 100%; min-height: 52px; font: inherit; font-size: 20px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; }
   input[type=file] { font-size: 17px; width: 100%; }
   button.primary { width: 100%; height: 60px; border: 0; border-radius: 14px; background: var(--accent); color: #fff; font-size: 21px; font-weight: 700; }
   button.primary:disabled { opacity: .4; }
   #status { font-size: 19px; min-height: 28px; margin-top: 14px; }
   #status.good { color: var(--good); } #status.bad { color: var(--bad); }
   ul { list-style: none; padding: 0; margin: 0; }
-  li { padding: 10px 0; border-top: 1px solid var(--line); font-size: 16px; color: var(--quiet); }
+  li { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 16px; color: var(--quiet); }
   li:first-child { border-top: 0; }
   li b { color: var(--ink); }
+  .thumb { display: inline-block; flex: 0 0 64px; width: 64px; height: 64px; object-fit: contain; background: #edf0f5; border-radius: 10px; }
+  .details { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .delete { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--bad); font-size: 16px; }
+  #completed { display: none; width: 128px; height: 128px; object-fit: contain; margin-top: 12px; }
+  #list-error { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -33,82 +36,135 @@
   <p class="lead">스캔한 물건을 장식으로 쓸 수 있게 운영 PC로 보냅니다. 변환에 몇 초~1분 걸립니다.</p>
 
   <section>
-    <label>1. 학생 번호</label>
-    <div class="ids" id="ids"></div>
+    <label for="name">1. 장식 이름 (최대 12자)</label>
+    <input id="name" type="text" maxlength="12" placeholder="예: 초록 공룡">
   </section>
 
   <section>
     <label for="file">2. 스캔 파일 (USDZ, GLB, OBJ, FBX)</label>
-    <input id="file" type="file" accept=".usdz,.usd,.usdc,.glb,.gltf,.obj,.fbx">
+    <input id="file" type="file" accept=".usdz,.usd,.usdc,.usda,.glb,.gltf,.obj,.fbx">
   </section>
 
   <section>
     <button class="primary" id="send" disabled>보내기</button>
-    <div id="status"></div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <img id="completed" alt="완료된 스캔 장식">
   </section>
 
   <section>
-    <label>이 학생의 스캔</label>
-    <ul id="list"><li>학생 번호를 고르세요.</li></ul>
+    <label>공유 스캔 장식 <span id="count">0 / 40</span></label>
+    <p id="list-error" role="status"></p>
+    <ul id="list"><li>목록을 불러오는 중…</li></ul>
   </section>
 </main>
 <script>
-  const STUDENTS = 30;
-  let studentId = null;
-  const ids = document.getElementById("ids"), fileInput = document.getElementById("file");
+  let busy = false, loading = false;
+  const nameInput = document.getElementById("name"), fileInput = document.getElementById("file");
   const send = document.getElementById("send"), status = document.getElementById("status"), list = document.getElementById("list");
-
-  for (let i = 1; i <= STUDENTS; i++) {
-    const b = document.createElement("button");
-    b.textContent = i;
-    b.onclick = () => { studentId = i; [...ids.children].forEach(c => c.classList.toggle("on", c === b)); refresh(); loadList(); };
-    ids.appendChild(b);
-  }
+  const completed = document.getElementById("completed"), listError = document.getElementById("list-error");
+  nameInput.oninput = refresh;
   fileInput.onchange = refresh;
 
-  function refresh() { send.disabled = !(studentId && fileInput.files.length); }
+  function refresh() {
+    const length = Array.from(nameInput.value.trim()).length;
+    send.disabled = busy || length < 1 || length > 12 || !fileInput.files.length;
+  }
   function show(text, kind) { status.textContent = text; status.className = kind || ""; }
 
+  async function request(url, options) {
+    const res = await fetch(url, options);
+    if (res.status === 204) return null;
+    const body = await res.json();
+    if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : `서버 오류 (${res.status})`);
+    return body;
+  }
+
   send.onclick = async () => {
+    if (send.disabled) return;
     const form = new FormData();
-    form.append("id", studentId);
+    form.append("name", nameInput.value.trim());
     form.append("file", fileInput.files[0]);
-    send.disabled = true;
+    busy = true;
+    refresh();
+    completed.style.display = "none";
     show("보내는 중…");
     try {
-      const res = await fetch("/api/scans", { method: "POST", body: form });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.detail || res.status);
+      const body = await request("/api/scans", { method: "POST", body: form });
       await poll(body.jobId);
     } catch (e) {
       show("보내지 못했어요: " + e.message, "bad");
     }
+    busy = false;
     refresh();
   };
 
   async function poll(jobId) {
     for (;;) {
-      const job = await (await fetch(`/api/scans/jobs/${jobId}`)).json();
-      if (job.status === "queued") show("순서를 기다리는 중…");
-      else if (job.status === "converting") show("장식으로 바꾸는 중…");
-      else if (job.status === "done") { show("완료! 색칠 앱의 꾸미기에서 쓸 수 있어요.", "good"); fileInput.value = ""; loadList(); return; }
-      else { show("변환하지 못했어요. 다시 스캔해 주세요. (" + job.error + ")", "bad"); return; }
+      const job = await request(`/api/scans/jobs/${encodeURIComponent(jobId)}`);
+      if (job.status === "queued") show("대기 중…");
+      else if (job.status === "converting") show("변환 중…");
+      else if (job.status === "done") {
+        show("완료! 모두 색칠 앱의 꾸미기에서 쓸 수 있어요.", "good");
+        fileInput.value = "";
+        const body = await request("/api/scans");
+        const entry = body.scans.find(s => s.itemId === job.itemId);
+        if (entry && entry.thumb) {
+          completed.src = "/" + entry.thumb;
+          completed.onerror = () => { completed.style.display = "none"; };
+          completed.style.display = "block";
+        }
+        await loadList();
+        return;
+      }
+      else { show(job.error || "변환 실패", "bad"); return; }
       await new Promise(r => setTimeout(r, 1000));
     }
   }
 
   async function loadList() {
-    const { scans } = await (await fetch(`/api/scans?owner=${studentId}`)).json();
-    list.innerHTML = scans.length ? "" : "<li>아직 없어요.</li>";
-    for (const s of scans) {
-      const li = document.createElement("li");
-      const [x, y, z] = s.dimensions.map(v => Math.round(v * 100));
-      const name = document.createElement("b");
-      name.textContent = s.sourceName;   // 파일 이름은 사용자가 정하므로 HTML로 넣지 않음
-      li.append(name, ` · ${x}×${y}×${z}cm · 삼각형 ${s.triangles.toLocaleString()}개`);
-      list.appendChild(li);
+    if (loading) return;
+    loading = true;
+    try {
+      const { scans, max, canManage } = await request("/api/scans");
+      listError.textContent = "";
+      document.getElementById("count").textContent = `${scans.length} / ${max}`;
+      list.replaceChildren();
+      if (!scans.length) {
+        const empty = document.createElement("li");
+        empty.textContent = "아직 없어요.";
+        list.appendChild(empty);
+      }
+      for (const s of scans) {
+        const li = document.createElement("li"), preview = document.createElement(s.thumb ? "img" : "span");
+        preview.className = "thumb";
+        if (s.thumb) { preview.src = "/" + s.thumb; preview.alt = s.name; preview.loading = "lazy"; }
+        const details = document.createElement("span"), name = document.createElement("b");
+        details.className = "details";
+        name.textContent = s.name;   // 표시 이름은 사용자가 정하므로 HTML로 넣지 않음
+        details.append(name, document.createElement("br"), `삼각형 ${Number(s.triangles || 0).toLocaleString()}개`);
+        li.append(preview, details);
+        if (canManage) {
+          const remove = document.createElement("button");
+          remove.className = "delete";
+          remove.textContent = "지우기";
+          remove.onclick = async () => {
+            if (!confirm(`'${s.name}' 스캔을 지울까요?`)) return;
+            remove.disabled = true;
+            try { await request(`/api/scans/${encodeURIComponent(s.itemId)}`, { method: "DELETE" }); await loadList(); }
+            catch (e) { show(e.message, "bad"); remove.disabled = false; }
+          };
+          li.appendChild(remove);
+        }
+        list.appendChild(li);
+      }
+    } catch (e) {
+      listError.textContent = "목록을 불러오지 못했어요: " + e.message;
+    } finally {
+      loading = false;
     }
   }
+  loadList();
+  setInterval(loadList, 5000);
 </script>
 </body>
 </html>
