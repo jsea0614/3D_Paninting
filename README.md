@@ -8,7 +8,8 @@ Quest VR 앱은 같은 담당자의 저장소 `JobExperienceWorld`이며, 두 �
 | --- | --- |
 | `Assets/_Project` | 색칠 앱 (씬 `Scenes/PaintApp.unity`) |
 | `Packages/com.wonju.character-shared` | Quest 앱과 같이 쓰는 캐릭터, `Wonju/CharacterPaint` 셰이더, 부위 마스크 |
-| `Server/` | 운영 PC 업로드 서버 (Python, [사용법](Server/README.md)) |
+| `Server/` | 운영 PC 업로드 서버 (Python, [사용법](Server/README.md)) — 휴대폰 사진 → 스캔 장식 페이지 `/scan` 포함 |
+| `Server/worker/` | 사진 → 3D AI(TRELLIS.2) GPU 작업기, GPU PC WSL에서 따로 실행 ([설치](Server/worker/README.md)) |
 | `Art/Icons/` | UI 아이콘 원본과 생성 스크립트 |
 
 ## 개발
