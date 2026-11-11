@@ -5,6 +5,7 @@ import shutil
 import struct
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -249,13 +250,13 @@ def test_legacy_owner_index_is_read_without_losing_scan(tmp_path):
     assert not store.is_registered({"itemId": "scan_ab12", "file": "scans/other.glb"})
 
 
-def test_glb_rejects_more_than_6000_triangles_and_1024_texture():
+def test_glb_rejects_more_than_2000_triangles_and_1024_texture():
     data = make_cube_glb()
     json_size = struct.unpack_from("<I", data, 12)[0]
     document = json.loads(data[20:20 + json_size])
     binary = data[28 + json_size:]
-    indices = struct.pack("<H", 0) * (6001 * 3)
-    document["accessors"][2]["count"] = 6001 * 3
+    indices = struct.pack("<H", 0) * (2001 * 3)
+    document["accessors"][2]["count"] = 2001 * 3
     document["bufferViews"][2] = {"buffer": 0, "byteOffset": len(binary), "byteLength": len(indices)}
     binary += indices
     binary += b"\0" * (-len(binary) % 4)
@@ -269,7 +270,7 @@ def test_glb_rejects_more_than_6000_triangles_and_1024_texture():
     encoded += b" " * (-len(encoded) % 4)
     chunks = struct.pack("<I4s", len(encoded), b"JSON") + encoded + struct.pack("<I4s", len(binary), b"BIN\0") + binary
     info = glb.inspect(struct.pack("<4sII", b"glTF", 2, 12 + len(chunks)) + chunks)
-    assert info.triangles == 6001 and info.images == [(1024, 1024)]
+    assert info.triangles == 2001 and info.images == [(1024, 1024)]
     assert any("삼각형" in p for p in info.problems) and any("텍스처" in p for p in info.problems)
 
 
@@ -280,6 +281,257 @@ def test_glb_rejects_more_than_2mb():
     struct.pack_into("<I", data, 8, len(data))
     struct.pack_into("<I", data, 20 + json_size, len(data) - 28 - json_size)
     assert any("파일" in p for p in glb.inspect(bytes(data)).problems)
+
+
+# ───────────────────────── 사진 생성 (GPU 대신 원격 경계만 대체) ─────────────────────────
+
+class FakeWorker:
+    def __init__(self, candidates=(True, True, True), payloads=None, error=None):
+        self.candidates = list(candidates)
+        self.payloads = payloads or {}
+        self.error = error
+        self.entered, self.release = threading.Event(), threading.Event()
+        self.release.set()
+
+    def health(self):
+        return {"ok": True, "loaded": True, "queue": 0}
+
+    def submit(self, source_name, data, seeds, **kwargs):
+        if self.error:
+            raise OSError(self.error)
+        assert data.startswith(b"\x89PNG") and len(seeds) == 3
+        return "remote-job"
+
+    def status(self, job_id, **kwargs):
+        assert job_id == "remote-job"
+        self.entered.set()
+        assert self.release.wait(5)
+        return {"status": "done", "done": 3, "total": 3, "error": None, "candidates": self.candidates}
+
+    def download(self, job_id, index, **kwargs):
+        assert job_id == "remote-job" and self.candidates[index]
+        return self.payloads.get(index, b"scan")
+
+
+def photo_setup(tmp_path, worker=None, **kwargs):
+    app = create_app(tmp_path, converter=fake_converter, worker=worker or FakeWorker(), **kwargs)
+    return app, TestClient(app)
+
+
+def post_photo(client, name="공룡", content=None, filename="dino.png"):
+    return client.post("/api/scans/photo", data={"name": name},
+                       files={"image": (filename, make_png(16, 16) if content is None else content, "image/png")})
+
+
+def wait_photo(client, job_id, status="choose", timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/scans/jobs/{job_id}").json()
+        if job["status"] == status:
+            return job
+        if job["status"] == "failed" and status != "failed":
+            pytest.fail(str(job))
+        time.sleep(.01)
+    pytest.fail(f"사진 작업이 {status}가 되지 않았습니다: {job}")
+
+
+def test_photo_generates_three_previews_then_registers_only_chosen_candidate(tmp_path):
+    worker = FakeWorker()
+    worker.release.clear()
+    app, client = photo_setup(tmp_path, worker)
+    response = post_photo(client, name="  공룡  ")
+    assert response.status_code == 202, response.text
+    jid = response.json()["jobId"]
+    try:
+        assert worker.entered.wait(2)
+        assert client.get(f"/api/scans/jobs/{jid}").json()["status"] == "generating"
+        # 원격 생성 중에도 기존 GLB 변환이 완료되어야 합니다.
+        assert upload_scan(client, app)["status"] == "done"
+    finally:
+        worker.release.set()
+    job = wait_photo(client, jid)
+    assert job["kind"] == "photo" and job["progress"] == {"done": 3, "total": 3}
+    assert [c["index"] for c in job["candidates"] if c["ok"]] == [0, 1, 2]
+    for candidate in job["candidates"]:
+        assert client.get(candidate["thumb"]).content == make_png(256, 256)
+    assert len(app.state.scans.list()) == 1  # 아직 사진 후보는 등록하지 않음
+    selected = client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 1})
+    assert selected.status_code == 200, selected.text
+    entry = selected.json()
+    assert entry["name"] == "공룡" and entry["sourceName"] == "dino.png" and type(entry["seed"]) is int
+    assert client.get(f"/{entry['file']}").content == make_cube_glb(.1)
+    assert not (app.state.jobs.work_dir / jid).exists()
+    assert client.get(f"/api/scans/jobs/{jid}").json()["status"] == "done"
+    assert client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 1}).status_code == 409
+    assert client.post(f"/api/scans/jobs/{jid}/discard").status_code == 409
+
+
+@pytest.mark.parametrize("worker,want", [
+    (FakeWorker(payloads={1: b"fail"}), [0, 2]),
+    (FakeWorker(candidates=(True, False, True)), [0, 2]),
+    (FakeWorker(payloads={0: b"huge", 1: b"fail", 2: b"fail"}), []),
+])
+def test_photo_partial_and_total_failure_never_register_unchecked_results(tmp_path, worker, want):
+    app, client = photo_setup(tmp_path, worker)
+    jid = post_photo(client).json()["jobId"]
+    job = wait_photo(client, jid, "choose" if want else "failed")
+    assert [c["index"] for c in job["candidates"] if c["ok"]] == want
+    assert app.state.scans.list() == []
+    if not want:
+        assert "정면" in job["error"] and not (app.state.jobs.work_dir / jid).exists()
+    else:
+        assert client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 1}).status_code == 409
+
+
+def test_photo_discard_and_clock_expiry_release_reserved_library_slot(tmp_path):
+    now = [100.0]
+    app, client = photo_setup(tmp_path, clock=lambda: now[0])
+    for _ in range(39):
+        app.state.scans.add(make_cube_glb(), None, {"name": "컵"})
+    jid = post_photo(client).json()["jobId"]
+    wait_photo(client, jid)
+    assert post_photo(client).status_code == 409
+    assert client.post("/api/scans", data={"name": "컵"}, files={"file": ("x.glb", b"x")}).status_code == 409
+    now[0] += 1801
+    assert client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 0}).status_code == 409
+    assert client.get(f"/api/scans/jobs/{jid}").json()["status"] == "discarded"
+    assert not (app.state.jobs.work_dir / jid).exists()
+    jid2 = post_photo(client).json()["jobId"]
+    wait_photo(client, jid2)
+    assert client.post(f"/api/scans/jobs/{jid2}/discard").status_code == 200
+    assert len(app.state.scans.list()) == 39
+    assert not (app.state.jobs.work_dir / jid2).exists()
+
+
+def test_photo_unconfigured_unreachable_and_worker_status(tmp_path, monkeypatch):
+    monkeypatch.delenv("TRELLIS_WORKER_URL", raising=False)
+    monkeypatch.delenv("TRELLIS_WORKER_TOKEN", raising=False)
+    client = TestClient(create_app(tmp_path / "none", converter=fake_converter))
+    assert post_photo(client).status_code == 503
+    assert client.get("/api/scans/worker").json()["configured"] is False
+    app, client = photo_setup(tmp_path / "bad", FakeWorker(error="HTTP 401"))
+    jid = post_photo(client).json()["jobId"]
+    job = wait_photo(client, jid, "failed")
+    assert "3D 생성 PC에 연결할 수 없어요" in job["error"] and "401" in job["error"]
+    assert app.state.scans.list() == []
+    assert client.get("/api/scans/worker").json() == {"configured": True, "ok": True, "loaded": True, "queue": 0}
+
+
+@pytest.mark.parametrize("name,content,filename,want", [
+    ("", b"\x89PNG\r\n\x1a\n", "x.png", 400),
+    ("가" * 13, b"\x89PNG\r\n\x1a\n", "x.png", 400),
+    ("컵", b"not a picture", "x.png", 400),
+    ("컵", make_png(16, 16), "x.gif", 400),
+    ("컵", b"x" * (20 * 1024 * 1024 + 1), "x.png", 413),
+], ids=["empty-name", "long-name", "not-image", "extension", "too-large"])
+def test_photo_validates_name_type_and_size(tmp_path, name, content, filename, want):
+    _, client = photo_setup(tmp_path)
+    assert post_photo(client, name, content, filename).status_code == want
+
+
+def test_photo_choose_rejects_missing_invalid_and_unready_candidates(tmp_path):
+    worker = FakeWorker()
+    worker.release.clear()
+    _, client = photo_setup(tmp_path, worker)
+    jid = post_photo(client).json()["jobId"]
+    try:
+        assert client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 0}).status_code == 409
+    finally:
+        worker.release.set()
+    wait_photo(client, jid)
+    for index in (-1, 3, True, "0", 1.1, None):
+        assert client.post(f"/api/scans/jobs/{jid}/choose", json={"index": index}).status_code in (400, 409)
+    assert client.post("/api/scans/jobs/missing/choose", json={"index": 0}).status_code == 404
+    assert client.get(f"/api/scans/jobs/{jid}/candidates/99.png").status_code == 404
+
+
+def test_photo_worker_reports_all_seeds_failed_with_retake_message(tmp_path):
+    class FailedWorker(FakeWorker):
+        def status(self, job_id, **kwargs):
+            return {"status": "failed", "done": 3, "total": 3, "candidates": [False] * 3,
+                    "error": "CUDA out of memory"}
+
+    app, client = photo_setup(tmp_path, FailedWorker())
+    jid = post_photo(client).json()["jobId"]
+    job = wait_photo(client, jid, "failed")
+    assert "정면에서 조금 위로" in job["error"]
+    assert app.state.scans.list() == []
+
+
+def test_photo_times_out_after_ten_minutes_and_releases_capacity(tmp_path):
+    now = [0.0]
+
+    class SlowWorker(FakeWorker):
+        def status(self, job_id, **kwargs):
+            now[0] += 601
+            return {"status": "running", "done": 0, "total": 3, "candidates": [False] * 3}
+
+    app, client = photo_setup(tmp_path, SlowWorker(), clock=lambda: now[0])
+    jid = post_photo(client).json()["jobId"]
+    job = wait_photo(client, jid, "failed")
+    assert "10분 시간 초과" in job["error"]
+    assert not (app.state.jobs.work_dir / jid).exists()
+
+
+def test_photo_concurrent_choice_registers_once(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    app, client = photo_setup(tmp_path)
+    jid = post_photo(client).json()["jobId"]
+    wait_photo(client, jid)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        codes = list(pool.map(lambda _: client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 0}).status_code,
+                              range(2)))
+    assert sorted(codes) == [200, 409]
+    assert len(app.state.scans.list()) == 1
+
+
+def test_photo_urllib_client_roundtrip_against_authenticated_worker(tmp_path, monkeypatch):
+    import socket
+    import urllib.error
+    import uvicorn
+    from scans import WorkerClient
+    from worker.trellis_worker import create_app as create_worker
+
+    seen = []
+
+    def generate(image, dst, cut, seed, faces):
+        assert image.read_bytes() == make_png(16, 16) and faces == 1500
+        seen.append(seed)
+        dst.write_bytes(make_cube_glb(.1))
+        cut.write_bytes(make_png(16, 16))
+
+    token = "local-test-secret"
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+    server = uvicorn.Server(uvicorn.Config(create_worker(token, tmp_path / "gpu", lambda: generate),
+                                           log_level="error"))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert server.started
+        assert WorkerClient(url, token).health()["loaded"] is True
+        with pytest.raises(urllib.error.HTTPError) as error:
+            WorkerClient(url, "wrong").health()
+        assert error.value.code == 401
+        monkeypatch.setenv("TRELLIS_WORKER_URL", url)
+        monkeypatch.setenv("TRELLIS_WORKER_TOKEN", token)
+        app = create_app(tmp_path / "server", converter=fake_converter)
+        client = TestClient(app)
+        jid = post_photo(client).json()["jobId"]
+        wait_photo(client, jid, timeout=15)  # 실제 작업기 상태 조회 간격은 5초
+        response = client.post(f"/api/scans/jobs/{jid}/choose", json={"index": 0})
+        assert response.status_code == 200
+        assert len(seen) == 3 and response.json()["seed"] == seen[0]
+        assert client.get(f"/{response.json()['file']}").content == make_cube_glb(.1)
+    finally:
+        server.should_exit = True
+        thread.join(5)
+        sock.close()
 
 
 # ───────────────────────── 실제 Blender (설치된 PC에서만) ─────────────────────────

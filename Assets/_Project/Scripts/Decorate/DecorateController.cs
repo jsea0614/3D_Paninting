@@ -12,7 +12,7 @@ namespace Wonju.PaintApp
     /// </summary>
     public class DecorateController : MonoBehaviour
     {
-        enum DragMode { None, Pending, MovingAccessory, Rotating }
+        enum DragMode { None, Pending, MovingAccessory, Rotating, Transform }
 
         [SerializeField] AccessoryRig rig;
         [SerializeField] PaintCanvas canvas;
@@ -30,6 +30,9 @@ namespace Wonju.PaintApp
         readonly InputAction biggerKey = new("Bigger", InputActionType.Button, "<Keyboard>/rightBracket");
         readonly InputAction undoKey = new("Undo", InputActionType.Button, "<Keyboard>/z");
         readonly InputAction redoKey = new("Redo", InputActionType.Button, "<Keyboard>/y");
+        readonly InputAction moveKey = new("MoveMode", InputActionType.Button, "<Keyboard>/w");
+        readonly InputAction rotateKey = new("RotateMode", InputActionType.Button, "<Keyboard>/e");
+        readonly InputAction scaleKey = new("ScaleMode", InputActionType.Button, "<Keyboard>/r");
 
         readonly List<AccessoryRig.State> undo = new();
         readonly List<AccessoryRig.State> redo = new();
@@ -39,18 +42,33 @@ namespace Wonju.PaintApp
         Vector2 pressScreen, lastScreen;
         AccessoryRig.State beforeDrag;
         bool lastMoveValid;
+        AccessoryTransformGizmo gizmo;
+        bool inputEnabled;
 
         public bool CanUndo => undo.Count > 0;
         public bool CanRedo => redo.Count > 0;
         public event Action HistoryChanged;
+        public event Action TransformModeChanged;
+        public AccessoryTransformMode TransformMode => gizmo != null ? gizmo.Mode : AccessoryTransformMode.Move;
 
         /// <summary>false면 입력을 받지 않습니다 (색칠 모드, 창이 열려 있을 때).</summary>
-        public bool InputEnabled { get; set; }
+        public bool InputEnabled
+        {
+            get => inputEnabled;
+            set
+            {
+                inputEnabled = value;
+                if (!value) CancelDrag();
+                if (gizmo != null) gizmo.Visible = value && isActiveAndEnabled;
+            }
+        }
 
         void Awake()
         {
             deleteKey.AddBinding("<Keyboard>/delete");
             deleteKey.AddBinding("<Keyboard>/backspace");
+            gizmo = gameObject.AddComponent<AccessoryTransformGizmo>();
+            gizmo.Initialize(rig, viewCamera);
         }
 
         void OnEnable()
@@ -62,6 +80,7 @@ namespace Wonju.PaintApp
         {
             foreach (var a in Actions()) a.Disable();
             CancelDrag();
+            if (gizmo != null) gizmo.Visible = false;
         }
 
         void Update()
@@ -74,13 +93,24 @@ namespace Wonju.PaintApp
             HandleKeys();
 
             var screen = point.ReadValue<Vector2>();
+            gizmo.Visible = true;
+            gizmo.SetPointer(screen);
             bool overUI = EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
 
             if (press.WasPressedThisFrame() && mode == DragMode.None && !overUI && !(orbit != null && orbit.IsDragging))
             {
                 pressScreen = screen;
-                pressed = rig.Pick(viewCamera.ScreenPointToRay(screen), out _);
-                mode = DragMode.Pending;
+                if (gizmo.TryBegin(screen))
+                {
+                    beforeDrag = rig.Snapshot();
+                    mode = DragMode.Transform;
+                    if (orbit != null) orbit.InputBlocked = true;
+                }
+                else
+                {
+                    pressed = rig.Pick(viewCamera.ScreenPointToRay(screen), out _);
+                    mode = DragMode.Pending;
+                }
             }
             else if (press.IsPressed())
             {
@@ -96,6 +126,9 @@ namespace Wonju.PaintApp
         {
             switch (mode)
             {
+                case DragMode.Transform:
+                    gizmo.Drag(screen);
+                    break;
                 case DragMode.Pending:
                     if (Vector2.Distance(screen, pressScreen) < dragThreshold) break;
                     if (pressed != null)
@@ -131,6 +164,10 @@ namespace Wonju.PaintApp
         {
             switch (mode)
             {
+                case DragMode.Transform:
+                    if (gizmo.End(false)) Record(beforeDrag);
+                    if (orbit != null) orbit.InputBlocked = false;
+                    break;
                 case DragMode.Pending:
                     // 끌지 않고 뗐으면 클릭: 장식이면 선택, 아니면 해제
                     rig.Select(pressed);
@@ -158,6 +195,8 @@ namespace Wonju.PaintApp
 
         void CancelDrag()
         {
+            if (gizmo != null && gizmo.IsDragging) gizmo.End(true);
+            if (mode == DragMode.Transform && orbit != null) orbit.InputBlocked = false;
             if (mode == DragMode.MovingAccessory && beforeDrag != null) rig.Restore(beforeDrag);
             if (outline != null) outline.Invalid = false;
             mode = DragMode.None;
@@ -167,6 +206,11 @@ namespace Wonju.PaintApp
 
         void HandleKeys()
         {
+            if (mode == DragMode.Transform)
+            {
+                if (escapeKey.WasPressedThisFrame()) CancelDrag();
+                return;
+            }
             if (mode == DragMode.MovingAccessory) return;
             var keyboard = Keyboard.current;
             bool ctrl = keyboard != null && keyboard.ctrlKey.isPressed;
@@ -181,6 +225,16 @@ namespace Wonju.PaintApp
             if (escapeKey.WasPressedThisFrame()) rig.Select(null);
             if (smallerKey.WasPressedThisFrame()) ScaleSelected(-1);
             if (biggerKey.WasPressedThisFrame()) ScaleSelected(1);
+            if (moveKey.WasPressedThisFrame()) SetTransformMode(AccessoryTransformMode.Move);
+            if (rotateKey.WasPressedThisFrame()) SetTransformMode(AccessoryTransformMode.Rotate);
+            if (scaleKey.WasPressedThisFrame()) SetTransformMode(AccessoryTransformMode.Scale);
+        }
+
+        public void SetTransformMode(AccessoryTransformMode value)
+        {
+            if (mode != DragMode.None || gizmo == null || gizmo.Mode == value) return;
+            gizmo.Mode = value;
+            TransformModeChanged?.Invoke();
         }
 
         // ───────────────────────── 패널·서랍에서 부르는 동작 (모두 되돌리기 기록) ─────────────────────────
@@ -206,10 +260,15 @@ namespace Wonju.PaintApp
         }
         public void ResetSelected() => Edit(() => rig.ResetPlacement(rig.Selected));
         public void RemoveSelected() => Edit(() => rig.Remove(rig.Selected));
+        public void AttachSelected(string boneName)
+        {
+            if (!rig.CanAttachTo(rig.Selected, boneName) || rig.Selected.Entry.bone == boneName) return;
+            Edit(() => rig.TrySetBone(rig.Selected, boneName));
+        }
 
         void Edit(Action action)
         {
-            if (rig.Selected == null) return;
+            if (rig.Selected == null || mode != DragMode.None) return;
             var before = rig.Snapshot();
             action();
             Record(before);
@@ -253,6 +312,6 @@ namespace Wonju.PaintApp
             return -1;
         }
 
-        InputAction[] Actions() => new[] { press, point, deleteKey, escapeKey, smallerKey, biggerKey, undoKey, redoKey };
+        InputAction[] Actions() => new[] { press, point, deleteKey, escapeKey, smallerKey, biggerKey, undoKey, redoKey, moveKey, rotateKey, scaleKey };
     }
 }

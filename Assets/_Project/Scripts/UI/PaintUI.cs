@@ -64,6 +64,8 @@ namespace Wonju.PaintApp.UI
         IconButton _paintModeButton, _decorateModeButton, _builtinTab, _scanTab, _smallerButton, _biggerButton;
         Text _drawerMessage;
         readonly List<IconButton> _drawerButtons = new();
+        readonly List<IconButton> _transformButtons = new();
+        readonly List<(string bone, IconButton button)> _boneButtons = new();
         bool _decorating, _scanTabOpen;
         bool _inputEnabled = true;
 
@@ -107,6 +109,7 @@ namespace Wonju.PaintApp.UI
             tools.Changed += RefreshTools;
             controller.HistoryChanged += RefreshHistory;
             if (_decorate != null) _decorate.HistoryChanged += RefreshHistory;
+            if (_decorate != null) _decorate.TransformModeChanged += RefreshTransformMode;
             if (_rig != null) _rig.Changed += RefreshDecorations;
             if (_scans != null) _scans.Changed += RebuildDrawer;
             RebuildDrawer();
@@ -119,6 +122,7 @@ namespace Wonju.PaintApp.UI
             tools.Changed -= RefreshTools;
             controller.HistoryChanged -= RefreshHistory;
             if (_decorate != null) _decorate.HistoryChanged -= RefreshHistory;
+            if (_decorate != null) _decorate.TransformModeChanged -= RefreshTransformMode;
             if (_rig != null) _rig.Changed -= RefreshDecorations;
             if (_scans != null) _scans.Changed -= RebuildDrawer;
         }
@@ -432,8 +436,30 @@ namespace Wonju.PaintApp.UI
 
         void BuildSelectionBar(Transform canvas)
         {
-            _selectionBar = UIFactory.Rect("SelectedAccessory", canvas, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 24f), new Vector2(872f, 80f));
+            _selectionBar = UIFactory.Rect("SelectedAccessory", canvas, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 24f), new Vector2(872f, 202f));
             ui.RoundedImage(_selectionBar, UIStyle.Panel, 20f);
+            ui.Label(UIFactory.Rect("AttachmentLabel", _selectionBar, Vector2.zero, new Vector2(0f, 0.5f),
+                new Vector2(16f, 168f), new Vector2(130f, 36f)), "붙일 부위", 20, true, UIStyle.Ink, TextAnchor.MiddleLeft);
+            (string label, string bone)[] bones = { ("머리", "Head"), ("몸통", "Chest"), ("허리", "Hips"),
+                ("왼손", "Left_Hand_Socket"), ("오른손", "Right_Hand_Socket") };
+            for (int i = 0; i < bones.Length; i++)
+            {
+                string boneName = bones[i].bone;
+                var button = TextButton(UIFactory.Rect(bones[i].label, _selectionBar, Vector2.zero, new Vector2(0f, 0.5f),
+                    new Vector2(150f + i * 142f, 168f), new Vector2(136f, 44f)), bones[i].label, () => _decorate.AttachSelected(boneName));
+                _boneButtons.Add((boneName, button));
+            }
+            string[] modes = { "이동 (W)", "회전 (E)", "크기 (R)" };
+            for (int i = 0; i < modes.Length; i++)
+            {
+                var mode = (AccessoryTransformMode)i;
+                _transformButtons.Add(TextButton(UIFactory.Rect(modes[i], _selectionBar,
+                    new Vector2(0f, 0f), new Vector2(0f, 0.5f), new Vector2(12f + i * 150f, 106f), new Vector2(144f, 44f)),
+                    modes[i], () => _decorate.SetTransformMode(mode)));
+            }
+            ui.Label(UIFactory.Rect("TransformHint", _selectionBar, new Vector2(0f, 0f), new Vector2(0f, 0.5f),
+                new Vector2(476f, 106f), new Vector2(384f, 36f)), "축을 끌어 조절 · Esc 취소", 20, false, UIStyle.Quiet, TextAnchor.MiddleLeft);
+            RefreshTransformMode();
             (string label, Action clicked)[] actions =
             {
                 ("← 돌리기", () => _decorate.RotateSelected(-1, 0)),
@@ -446,10 +472,16 @@ namespace Wonju.PaintApp.UI
             };
             for (int i = 0; i < actions.Length; i++)
             {
-                var button = TextButton(UIFactory.Rect(actions[i].label, _selectionBar, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(12f + i * 122f, 0f), new Vector2(116f, 56f)), actions[i].label, actions[i].clicked);
+                var button = TextButton(UIFactory.Rect(actions[i].label, _selectionBar, new Vector2(0f, 0f), new Vector2(0f, 0.5f), new Vector2(12f + i * 122f, 40f), new Vector2(116f, 56f)), actions[i].label, actions[i].clicked);
                 if (i == 3) _smallerButton = button;
                 if (i == 4) _biggerButton = button;
             }
+        }
+
+        void RefreshTransformMode()
+        {
+            for (int i = 0; i < _transformButtons.Count; i++)
+                _transformButtons[i].SetSelected(_decorate != null && (int)_decorate.TransformMode == i);
         }
 
         void SetMode(bool decorating)
@@ -478,6 +510,11 @@ namespace Wonju.PaintApp.UI
             _selectionBar.gameObject.SetActive(_decorating && selected != null);
             _smallerButton.SetInteractable(selected != null && _rig.CanScale(selected, -1));
             _biggerButton.SetInteractable(selected != null && _rig.CanScale(selected, 1));
+            foreach (var (bone, button) in _boneButtons)
+            {
+                button.SetSelected(selected != null && selected.Entry.bone == bone);
+                button.SetInteractable(selected != null && _rig.CanAttachTo(selected, bone));
+            }
         }
 
         void BuildViewControls(Transform canvas)

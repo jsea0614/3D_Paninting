@@ -63,6 +63,7 @@ namespace Wonju.PaintApp
         public IReadOnlyList<Placed> Items => items;
         public Placed Selected => selected;
         public AccessoryDatabase Database => database;
+        public Transform ModelRoot => characterRoot != null ? characterRoot : transform;
         public int ScanCount => items.Count(p => p.IsScan);
 
         /// <summary>장식이 달리거나, 빠지거나, 바뀌거나, 선택이 바뀌면 호출됩니다.</summary>
@@ -198,6 +199,39 @@ namespace Wonju.PaintApp
 
         /// <summary>끌기를 마쳤을 때 호출합니다 (상태 변경 알림).</summary>
         public void CommitMove(Placed placed) => Sync(placed, true);
+
+        /// <summary>본을 유지하며 기즈모의 로컬 변환을 적용하고 규약 값과 동기화합니다.</summary>
+        public bool TrySetTransform(Placed placed, Vector3 localPosition, Quaternion localRotation, float scale, bool notify)
+        {
+            if (placed == null || !items.Contains(placed) || placed.Instance == null || placed.Origin == null
+                || !TransformGizmoMath.IsFinite(localPosition) || !TransformGizmoMath.IsFinite(localRotation)
+                || !TransformGizmoMath.IsFinite(scale) || scale <= 0
+                || Quaternion.Dot(localRotation, localRotation) < 1e-8f) return false;
+            float minimum = placed.Origin.scale * MinScaleFactor;
+            float maximum = placed.Origin.scale * MaxScaleFactor;
+            if (!TransformGizmoMath.IsFinite(minimum) || !TransformGizmoMath.IsFinite(maximum)) return false;
+            placed.Instance.SetLocalPositionAndRotation(localPosition, localRotation.normalized);
+            placed.Instance.localScale = Vector3.one * Mathf.Clamp(scale, minimum, maximum);
+            Sync(placed, notify);
+            return true;
+        }
+
+        public bool CanAttachTo(Placed placed, string boneName) =>
+            placed != null && items.Contains(placed) && placed.Instance != null && placed.AllowedBones != null
+            && Array.IndexOf(placed.AllowedBones, boneName) >= 0 && CharacterContract.FindBone(characterRoot, boneName) != null;
+
+        /// <summary>보이는 위치와 방향을 유지하며 따라갈 본을 바꿉니다.</summary>
+        public bool TrySetBone(Placed placed, string boneName)
+        {
+            if (!CanAttachTo(placed, boneName)) return false;
+            var bone = CharacterContract.FindBone(characterRoot, boneName);
+            if (placed.Instance.parent == bone) return false;
+            float scale = placed.Instance.localScale.x;
+            placed.Instance.SetParent(bone, true);
+            placed.Instance.localScale = Vector3.one * scale;
+            Sync(placed, true);
+            return true;
+        }
 
         // ───────────────────────── 패널 버튼 ─────────────────────────
 

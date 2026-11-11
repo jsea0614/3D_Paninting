@@ -3,7 +3,7 @@
     blender -b --factory-startup -P tools/convert_scan.py -- <입력> <출력.glb> <보고서.json> <썸네일.png>
 
 규약(Contract/CONTRACT.md) 경량화 기준
-    삼각형 6,000개 이하 (Decimate), 텍스처 1장 512×512 이하, GLB 2MB 이하,
+    삼각형 2,000개 이하 (Decimate), 텍스처 1장 512×512 이하, GLB 2MB 이하,
     단위 m, 피벗 = 바운딩박스 중심, 최대 길이 0.5m 초과 시 축소
 
 입력 형식: .glb .gltf .obj .fbx .usd .usdz .usdc .usda (Blender 4.2 LTS 이상 권장, 5.2 LTS에서 확인).
@@ -21,8 +21,8 @@ import bmesh
 import bpy
 from mathutils import Vector
 
-MAX_TRIANGLES = 6_000
-DECIMATE_TARGET = 5_700          # 반올림 오차를 감안해 기준보다 조금 낮게
+MAX_TRIANGLES = 2_000
+DECIMATE_TARGET = 1_500          # 반올림 오차를 감안해 기준보다 조금 낮게
 MAX_TEXTURE = 512
 MAX_BYTES = 2 * 1024 * 1024
 MAX_LENGTH = 0.5

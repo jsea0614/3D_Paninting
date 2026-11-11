@@ -34,6 +34,7 @@ import logging
 import os
 import struct
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -45,7 +46,8 @@ from fastapi.responses import FileResponse, Response
 import contract
 from logs import DeviceLogs, MAX_BODY
 from paintapp_dist import PaintAppDist
-from scans import MAX_LIBRARY, SCAN_EXTENSIONS, Converter, LibraryFullError, ScanJobs, blender_converter, find_blender
+from scans import (MAX_LIBRARY, MAX_PHOTO_BYTES, SCAN_EXTENSIONS, Converter, LibraryFullError,
+                   ScanJobs, WorkerClient, WorkerUnavailableError, blender_converter, find_blender)
 from storage import CharacterStore, ScanStore
 
 TEXTURE_SIZE = 1024
@@ -152,12 +154,15 @@ class PlayerStore:
 
 
 def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path: Path = DEFAULT_ITEM_IDS,
-               paintapp_dir: Path = DEFAULT_PAINTAPP_DIR) -> FastAPI:
+               paintapp_dir: Path = DEFAULT_PAINTAPP_DIR, *, worker=None, clock=time.monotonic) -> FastAPI:
     app = FastAPI(title="Paint Server")
     store = PlayerStore(data_dir)
     characters = CharacterStore(data_dir)
     scan_store = ScanStore(data_dir)
-    jobs = ScanJobs(scan_store, converter or blender_converter(find_blender()), data_dir / "scan_jobs")
+    worker_url, worker_token = os.environ.get("TRELLIS_WORKER_URL", "").strip(), os.environ.get("TRELLIS_WORKER_TOKEN", "").strip()
+    if worker is None and worker_url and worker_token:
+        worker = WorkerClient(worker_url, worker_token)
+    jobs = ScanJobs(scan_store, converter or blender_converter(find_blender()), data_dir / "scan_jobs", worker=worker, clock=clock)
     item_ids = json.loads(item_ids_path.read_text(encoding="utf-8"))
     known_items = {i["itemId"] for i in item_ids["items"]}
     known_bones = set(item_ids["bones"])
@@ -248,11 +253,69 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
 
     # ───────────────────────── 스캔 ─────────────────────────
 
-    @app.post("/api/scans", status_code=202)
-    async def upload_scan(file: Annotated[UploadFile, File()], name: Annotated[str, Form()] = ""):
+    def scan_name(name):
         name = name.strip()
         if not 1 <= len(name) <= 12:
             raise HTTPException(400, "이름은 앞뒤 공백을 빼고 1~12자로 입력해 주세요.")
+        return name
+
+    @app.get("/api/scans/worker")
+    def scan_worker():
+        return jobs.worker_health()
+
+    @app.post("/api/scans/photo", status_code=202)
+    async def upload_photo(image: Annotated[UploadFile, File()], name: Annotated[str, Form()] = ""):
+        name = scan_name(name)
+        if jobs.worker is None:
+            raise HTTPException(503, "3D 생성 PC가 설정되지 않았어요")
+        source_name = Path((image.filename or "photo").replace("\\", "/")).name
+        if Path(source_name).suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+            raise HTTPException(400, "사진은 JPG 또는 PNG로 보내 주세요.")
+        data = await image.read(MAX_PHOTO_BYTES + 1)
+        if len(data) > MAX_PHOTO_BYTES:
+            raise HTTPException(413, "사진이 20MB를 넘습니다.")
+        if not (read_png_size(data) or data.startswith(b"\xff\xd8\xff")):
+            raise HTTPException(400, "JPG 또는 PNG 사진이 아닙니다.")
+        try:
+            job = await run_in_threadpool(jobs.submit_photo, name, source_name, data)
+        except LibraryFullError as e:
+            raise HTTPException(409, str(e)) from e
+        except WorkerUnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+        return {"jobId": job.jobId}
+
+    @app.get("/api/scans/jobs/{job_id}/candidates/{index}.png")
+    def candidate_thumbnail(job_id: str, index: int):
+        data = jobs.candidate_thumbnail(job_id, index)
+        if data is None:
+            raise HTTPException(404, "후보가 없습니다.")
+        return Response(data, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/scans/jobs/{job_id}/choose")
+    async def choose_photo(job_id: str, request: Request):
+        try:
+            body = await request.json()
+        except ValueError as e:
+            raise HTTPException(400, "후보 번호를 보내 주세요.") from e
+        if not isinstance(body, dict) or type(body.get("index")) is not int:
+            raise HTTPException(400, "후보 번호는 정수여야 합니다.")
+        return await run_in_threadpool(photo_action, jobs.choose, job_id, body["index"])
+
+    @app.post("/api/scans/jobs/{job_id}/discard")
+    def discard_photo(job_id: str):
+        return photo_action(jobs.discard, job_id)
+
+    def photo_action(action, *args):
+        try:
+            return action(*args)
+        except KeyError as e:
+            raise HTTPException(404, "작업이 없습니다.") from e
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @app.post("/api/scans", status_code=202)
+    async def upload_scan(file: Annotated[UploadFile, File()], name: Annotated[str, Form()] = ""):
+        name = scan_name(name)
         source_name = Path(file.filename or "scan").name
         if Path(source_name).suffix.lower() not in SCAN_EXTENSIONS:
             raise HTTPException(400, f"지원하지 않는 형식입니다. ({', '.join(sorted(SCAN_EXTENSIONS))})")

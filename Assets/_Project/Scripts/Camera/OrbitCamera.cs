@@ -54,6 +54,21 @@ namespace Wonju.PaintApp
         Vector3 TargetCenter => target != null ? target.bounds.center : Vector3.zero;
         public Vector3 Pivot => TargetCenter + currentPivotOffset;
         public bool IsDragging => dragging;
+        bool inputBlocked;
+        public bool InputBlocked
+        {
+            get => inputBlocked;
+            set
+            {
+                inputBlocked = value;
+                if (!value) return;
+                dragging = false;
+                yaw = currentYaw;
+                pitch = currentPitch;
+                distance = currentDistance;
+                pivotOffset = currentPivotOffset;
+            }
+        }
 
         void Awake()
         {
@@ -81,6 +96,7 @@ namespace Wonju.PaintApp
 
         void Update()
         {
+            if (InputBlocked) { dragging = false; return; }
             if (rotateHold.WasPressedThisFrame() && !IsPointerOverUI())
                 dragging = true;
             if (!rotateHold.IsPressed())
@@ -98,6 +114,7 @@ namespace Wonju.PaintApp
 
         void LateUpdate()
         {
+            if (InputBlocked) return;
             float t = 1f - Mathf.Exp(-smoothing * Time.unscaledDeltaTime);
             currentYaw = Mathf.LerpAngle(currentYaw, yaw, t);
             currentPitch = Mathf.Lerp(currentPitch, pitch, t);

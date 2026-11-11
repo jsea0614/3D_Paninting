@@ -28,12 +28,25 @@
   .delete { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--bad); font-size: 16px; }
   #completed { display: none; width: 128px; height: 128px; object-fit: contain; margin-top: 12px; }
   #list-error { color: var(--bad); }
+  #worker { color: var(--quiet); font-size: 16px; margin: 16px 0; }
+  .tips { line-height: 1.7; color: var(--quiet); font-size: 16px; }
+  details { margin: 16px 0; background: white; border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+  summary { cursor: pointer; font-size: 18px; font-weight: 600; }
+  details label { margin-top: 20px; }
+  #choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+  .candidate { border: 1px solid var(--line); border-radius: 12px; padding: 8px; background: #f8faff; font: inherit; min-height: 48px; }
+  .candidate img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; }
+  #actions { display: flex; gap: 12px; margin-top: 16px; }
+  #actions[hidden] { display: none; }
+  #actions button { flex: 1; min-height: 48px; font: inherit; border: 1px solid var(--line); border-radius: 10px; background: white; }
+  @media (max-width: 360px) { #choices { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <main>
   <h1>스캔 올리기</h1>
-  <p class="lead">스캔한 물건을 장식으로 쓸 수 있게 운영 PC로 보냅니다. 변환에 몇 초~1분 걸립니다.</p>
+  <p class="lead">물건 사진 한 장으로 장식을 만들어요. 보통 3~4분 뒤 마음에 드는 모양을 골라 주세요.</p>
+  <p id="worker" role="status">3D 생성 PC: 확인 중…</p>
 
   <section>
     <label for="name">1. 장식 이름 (최대 12자)</label>
@@ -41,15 +54,28 @@
   </section>
 
   <section>
-    <label for="file">2. 스캔 파일 (USDZ, GLB, OBJ, FBX)</label>
-    <input id="file" type="file" accept=".usdz,.usd,.usdc,.usda,.glb,.gltf,.obj,.fbx">
+    <label for="photo">2. 물건 사진 (JPG, PNG · 20MB 이하)</label>
+    <input id="photo" type="file" accept="image/*" capture="environment">
+    <p class="tips">정면에서 조금 위(20~30°)에서<br>물건이 화면 절반 이상<br>단색 배경, 바로 위에서 찍지 않기</p>
+    <button class="primary" id="send-photo" disabled>사진 보내기</button>
   </section>
 
   <section>
-    <button class="primary" id="send" disabled>보내기</button>
     <div id="status" role="status" aria-live="polite"></div>
+    <div id="choices" aria-label="만들어진 후보"></div>
+    <div id="actions" hidden>
+      <button id="retry">다시 만들기</button><button id="discard">버리기</button>
+    </div>
     <img id="completed" alt="완료된 스캔 장식">
   </section>
+
+  <details>
+    <summary>GLB 파일로 올리기</summary>
+    <p class="tips">직접 스캔한 파일도 올릴 수 있어요. 위에 장식 이름을 입력해 주세요.</p>
+    <label for="file">스캔 파일 (USDZ, GLB, OBJ, FBX)</label>
+    <input id="file" type="file" accept=".usdz,.usd,.usdc,.usda,.glb,.gltf,.obj,.fbx">
+    <p><button class="primary" id="send" disabled>파일 보내기</button></p>
+  </details>
 
   <section>
     <label>공유 스캔 장식 <span id="count">0 / 40</span></label>
@@ -58,16 +84,24 @@
   </section>
 </main>
 <script>
-  let busy = false, loading = false;
+  let busy = false, loading = false, activeJob = null, pendingPhoto = null, acting = false;
   const nameInput = document.getElementById("name"), fileInput = document.getElementById("file");
   const send = document.getElementById("send"), status = document.getElementById("status"), list = document.getElementById("list");
   const completed = document.getElementById("completed"), listError = document.getElementById("list-error");
+  const photoInput = document.getElementById("photo"), sendPhoto = document.getElementById("send-photo");
+  const choices = document.getElementById("choices"), actions = document.getElementById("actions");
+  const retry = document.getElementById("retry"), discard = document.getElementById("discard");
   nameInput.oninput = refresh;
   fileInput.onchange = refresh;
+  photoInput.onchange = refresh;
 
   function refresh() {
     const length = Array.from(nameInput.value.trim()).length;
     send.disabled = busy || length < 1 || length > 12 || !fileInput.files.length;
+    sendPhoto.disabled = busy || length < 1 || length > 12 || !photoInput.files.length;
+    for (const input of [nameInput, fileInput, photoInput]) input.disabled = busy;
+    retry.disabled = acting;
+    discard.disabled = acting;
   }
   function show(text, kind) { status.textContent = text; status.className = kind || ""; }
 
@@ -75,9 +109,106 @@
     const res = await fetch(url, options);
     if (res.status === 204) return null;
     const body = await res.json();
-    if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : `서버 오류 (${res.status})`);
+    if (!res.ok) {
+      const error = new Error(typeof body.detail === "string" ? body.detail : `서버 오류 (${res.status})`);
+      error.status = res.status;
+      throw error;
+    }
     return body;
   }
+
+  sendPhoto.onclick = async () => {
+    if (sendPhoto.disabled) return;
+    const file = photoInput.files[0];
+    if (!/\.(jpe?g|png)$/i.test(file.name)) { show("사진은 JPG 또는 PNG로 보내 주세요.", "bad"); return; }
+    if (file.size > 20 * 1024 * 1024) { show("사진은 20MB 이하로 보내 주세요.", "bad"); return; }
+    pendingPhoto = { file, name: nameInput.value.trim() };
+    await generatePhoto();
+  };
+
+  async function generatePhoto() {
+    busy = true;
+    acting = false;
+    activeJob = null;
+    choices.replaceChildren();
+    actions.hidden = true;
+    completed.style.display = "none";
+    refresh();
+    show("사진을 보내는 중…");
+    const form = new FormData();
+    form.append("name", pendingPhoto.name);
+    form.append("image", pendingPhoto.file);
+    try {
+      const body = await request("/api/scans/photo", { method: "POST", body: form });
+      activeJob = body.jobId;
+      await poll(body.jobId);
+    } catch (e) {
+      // 접수된 작업을 잃지 않도록 상태 조회 실패 시 같은 작업을 재조회합니다.
+      show(e.message, "bad");
+      if (!activeJob) busy = false;
+    }
+    refresh();
+  }
+
+  async function chooseCandidate(index) {
+    if (acting || !confirm("이 모양을 공유 장식으로 등록할까요?")) return;
+    acting = true;
+    refresh();
+    try {
+      const entry = await request(`/api/scans/jobs/${encodeURIComponent(activeJob)}/choose`, {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({index})
+      });
+      show("등록했어요! 색칠 앱의 스캔 탭에서 쓸 수 있어요.", "good");
+      if (entry.thumb) { completed.src = "/" + entry.thumb; completed.style.display = "block"; }
+      choices.replaceChildren(); actions.hidden = true;
+      busy = false; activeJob = null; pendingPhoto = null; photoInput.value = "";
+      await loadList();
+    } catch (e) {
+      show(e.message, "bad");
+      if (e.status === 409 || e.status === 404) await recoverPhoto();
+    }
+    finally { acting = false; refresh(); }
+  }
+
+  async function discardCandidates() {
+    if (activeJob) {
+      try { await request(`/api/scans/jobs/${encodeURIComponent(activeJob)}/discard`, {method: "POST"}); }
+      catch (e) {
+        if (e.status !== 409 && e.status !== 404) throw e;
+        await recoverPhoto();
+        if (activeJob) throw e;
+      }
+    }
+    activeJob = null;
+    choices.replaceChildren(); actions.hidden = true;
+  }
+
+  async function recoverPhoto() {
+    try {
+      const job = await request(`/api/scans/jobs/${encodeURIComponent(activeJob)}`);
+      if (job.status === "choose") return;
+      if (job.status === "done") {
+        show("이 작업은 이미 등록했어요.", "good"); pendingPhoto = null;
+        await loadList();
+      } else show(job.error || "후보 보관 시간이 끝났어요. 다시 보내 주세요.", "bad");
+    } catch (e) { if (e.status !== 404) return; }
+    activeJob = null; busy = false; choices.replaceChildren(); actions.hidden = true;
+  }
+
+  retry.onclick = async () => {
+    if (acting || !pendingPhoto) return;
+    acting = true; refresh();
+    try { await discardCandidates(); if (pendingPhoto) await generatePhoto(); }
+    catch (e) { show(e.message, "bad"); }
+    finally { acting = false; refresh(); }
+  };
+  discard.onclick = async () => {
+    if (acting) return;
+    acting = true; refresh();
+    try { await discardCandidates(); busy = false; pendingPhoto = null; show("후보를 버렸어요."); }
+    catch (e) { show(e.message, "bad"); }
+    finally { acting = false; refresh(); }
+  };
 
   send.onclick = async () => {
     if (send.disabled) return;
@@ -99,10 +230,37 @@
   };
 
   async function poll(jobId) {
+    let failures = 0;
     for (;;) {
-      const job = await request(`/api/scans/jobs/${encodeURIComponent(jobId)}`);
+      let job;
+      try { job = await request(`/api/scans/jobs/${encodeURIComponent(jobId)}`); failures = 0; }
+      catch (e) {
+        if (e.status === 404) {
+          show("작업을 찾지 못했어요. 사진을 다시 보내 주세요.", "bad");
+          activeJob = null; busy = false; refresh(); return;
+        }
+        show("상태를 확인하지 못했어요. 다시 연결하는 중… " + e.message, "bad");
+        await new Promise(r => setTimeout(r, Math.min(10000, 1000 * ++failures)));
+        continue;
+      }
       if (job.status === "queued") show("대기 중…");
-      else if (job.status === "converting") show("변환 중…");
+      else if (job.status === "generating") show(`만드는 중 ${job.progress.done}/${job.progress.total} …`);
+      else if (job.status === "converting") show(job.kind === "photo" ? "정리하는 중…" : "변환 중…");
+      else if (job.status === "choose") {
+        show("마음에 드는 모양을 눌러 주세요.");
+        choices.replaceChildren();
+        for (const c of job.candidates) {
+          if (!c.ok) continue;
+          const button = document.createElement("button"), img = document.createElement("img");
+          button.className = "candidate";
+          img.src = c.thumb; img.alt = `후보 ${c.index + 1}`;
+          button.append(img, `후보 ${c.index + 1}`);
+          button.onclick = () => chooseCandidate(c.index);
+          choices.appendChild(button);
+        }
+        actions.hidden = false;
+        return;
+      }
       else if (job.status === "done") {
         show("완료! 모두 색칠 앱의 꾸미기에서 쓸 수 있어요.", "good");
         fileInput.value = "";
@@ -116,7 +274,14 @@
         await loadList();
         return;
       }
-      else { show(job.error || "변환 실패", "bad"); return; }
+      else {
+        show(job.status === "discarded" ? "후보 보관 시간이 지나 버렸어요. 다시 보내 주세요." : job.error || "변환 실패", "bad");
+        if (job.kind === "photo") {
+          activeJob = null; busy = false;
+          choices.replaceChildren(); actions.hidden = true;
+        }
+        return;
+      }
       await new Promise(r => setTimeout(r, 1000));
     }
   }
@@ -165,6 +330,16 @@
   }
   loadList();
   setInterval(loadList, 5000);
+  async function loadWorker() {
+    let text = "연결 안 됨";
+    try {
+      const state = await request("/api/scans/worker");
+      if (state.ok) text = state.loaded ? "연결됨" : "모델 준비 중";
+    } catch (_) {}
+    document.getElementById("worker").textContent = "3D 생성 PC: " + text;
+  }
+  loadWorker();
+  setInterval(loadWorker, 10000);
 </script>
 </body>
 </html>
