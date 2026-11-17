@@ -28,7 +28,7 @@
 
 | 필드 | 규칙 |
 | --- | --- |
-| `id` | 1 이상의 정수. 학생 PC 번호 = Quest 번호. 파일 이름은 앞자리 0 없이 `7.png` |
+| `id` | 1 이상의 정수. 학생 PC 번호. 파일 이름은 앞자리 0 없이 `7.png` |
 | `name` | 별명, 1~8자. VR에서 다른 학생에게 보임 |
 | `texture` | `{id}.png` |
 | `accessories[].itemId` | 기본 장식은 `AccessoryDatabase`의 ID, 스캔 장식은 `scan_` + 서버가 만든 ID |

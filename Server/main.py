@@ -18,6 +18,8 @@ API (규약)
     GET  /api/health                 연결 확인
     POST /api/logs                   기기 로그 수집 (JSON, 최대 256KB/200개)
     GET  /api/logs                   기기 로그 파일 목록
+    POST /api/photos                 Quest 손 카메라 사진 (multipart: file JPEG 4MB 이하, device, characterId)
+    GET  /api/photos                 사진 파일 목록 (최신 먼저, 파일은 data/photos)
     GET  /download                   학생 PC용 색칠 앱 받기 페이지
     GET  /api/paintapp               색칠 앱 빌드 정보 (available, sizeMB, builtAt)
     GET  /download/PaintApp_{n}.zip  PC 번호 n용 색칠 앱 (config.json에 serverUrl·studentId가 들어 있음)
@@ -46,6 +48,7 @@ from fastapi.responses import FileResponse, Response
 import contract
 from logs import DeviceLogs, MAX_BODY
 from paintapp_dist import PaintAppDist
+from photos import MAX_PHOTO, PhotoStore
 from scans import (MAX_LIBRARY, MAX_PHOTO_BYTES, SCAN_EXTENSIONS, Converter, LibraryFullError,
                    ScanJobs, WorkerClient, WorkerUnavailableError, blender_converter, find_blender)
 from storage import CharacterStore, ScanStore
@@ -171,6 +174,7 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
     app.state.scans = scan_store
     app.state.jobs = jobs
     device_logs = DeviceLogs(data_dir / "logs")
+    photos = PhotoStore(data_dir / "photos")
     paintapp = PaintAppDist(paintapp_dir, data_dir / "dist")
 
     @app.post("/api/logs")
@@ -188,6 +192,17 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
     @app.get("/api/logs")
     def list_logs():
         return {"devices": device_logs.list()}
+
+    @app.post("/api/photos")
+    async def upload_photo_shot(file: Annotated[UploadFile, File()], device: Annotated[str, Form()],
+                                characterId: Annotated[int, Form()] = -1):
+        data = await file.read(MAX_PHOTO + 1)
+        name = await run_in_threadpool(photos.save, data, device, characterId)
+        return {"ok": True, "file": name}
+
+    @app.get("/api/photos")
+    def list_photos():
+        return {"photos": photos.list()}
 
     @app.get("/api/health")
     def health():

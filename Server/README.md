@@ -42,6 +42,8 @@
 | GET | `/api/health` | 연결 확인 |
 | POST | `/api/logs` | 기기 로그 JSON (최대 256KB·200개). `data/logs/{device}.log`에 저장, 5MB에서 `.log.1`로 회전 |
 | GET | `/api/logs` | 로그 파일 목록: `devices`의 `device`, `size`, `updatedAt`(UTC) |
+| POST | `/api/photos` | Quest 손 카메라 사진 multipart: `file`(JPEG, 4MB 이하), `device`(로그와 같은 형식), `characterId`(없으면 −1). `data/photos/{07번\|번호없음}_{YYYYMMDD-HHMMSS}_{device}.jpg` 저장 |
+| GET | `/api/photos` | 사진 파일 이름 목록 `photos` (최신 먼저) |
 | GET | `/download` | 학생 PC용 색칠 앱 받기 페이지 (PC 번호 버튼) |
 | GET | `/api/paintapp` | 색칠 앱 빌드 정보: `available`, `sizeMB`, `builtAt` |
 | GET | `/download/PaintApp_{n}.zip` | PC 번호 n(1~99)용 색칠 앱. `config.json`의 `studentId`=n, `serverUrl`=요청한 주소. 빌드가 없으면 404 |

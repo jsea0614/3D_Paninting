@@ -84,7 +84,7 @@ namespace Wonju.PaintApp.EditorTools
 1. 이 폴더(PaintApp)를 학생용 PC에 통째로 복사합니다.
 2. config.json을 메모장으로 열어 두 값을 바꿉니다.
    - serverUrl : 운영 PC 주소. 예) http://192.168.0.10:8081
-   - studentId : 이 PC의 학생 번호 = Quest 번호. 예) ""07""
+   - studentId : 이 PC의 학생 번호. 예) ""07""
 3. PaintApp.exe를 실행합니다. 처음 실행 때 Windows 방화벽 창이 뜨면 [허용]을 누릅니다.
 
   config.json을 고치지 않고 바로가기에 실행 인수를 붙여도 됩니다.

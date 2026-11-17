@@ -21,7 +21,7 @@ Quest VR 앱은 같은 담당자의 저장소 `JobExperienceWorld`이며, 두 �
 ## 배포 (학생용 PC)
 
 1. Unity 메뉴 **Tools > Build > Paint App (Windows)** → `Builds/PaintApp/`
-2. 폴더째 각 PC에 복사하고 `config.json`의 `studentId`를 Quest 번호와 같게 바꿉니다. 자세한 내용은 빌드 폴더의 `사용법.txt`
+2. 폴더째 각 PC에 복사하고 `config.json`의 `studentId`를 그 PC 번호로 바꿉니다. 자세한 내용은 빌드 폴더의 `사용법.txt`
 3. 운영자 단축키: `Ctrl+Shift+R` 회차 초기화, `Ctrl+Shift+Q` 종료
 4. 행사 전 부하 확인: 운영 PC에서 서버를 켜고 `cd Server && uv run load_test.py --server http://<운영 PC IP>:8081`
 
