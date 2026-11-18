@@ -401,6 +401,14 @@ def create_app(data_dir: Path, converter: Converter | None = None, item_ids_path
         log.info("색칠 앱 받기: PC %d, %s", pc_id, server_url)
         return FileResponse(path, media_type="application/zip", filename=f"PaintApp_{pc_id:02d}.zip")
 
+    # 서버 PC 이전용 묶음 (VR 저장소 Builds/Dist에서 만든 zip을 data/share/에 둔다). 페이지에 링크하지 않는다: 학생 데이터가 들어 있음.
+    @app.get("/download/PaintWorldServer.zip")
+    def server_bundle():
+        path = data_dir / "share" / "PaintWorldServer.zip"
+        if not path.is_file():
+            raise HTTPException(404, "서버 묶음이 없습니다.")
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
     # ───────────────────────── 이전 API ─────────────────────────
 
     @app.get("/api/players")

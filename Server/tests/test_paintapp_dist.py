@@ -64,3 +64,13 @@ def test_no_build(tmp_path):
     assert client.get("/api/paintapp").json()["available"] is False
     assert client.get("/download/PaintApp_1.zip").status_code == 404
     assert client.get("/download").status_code == 200
+
+
+def test_server_bundle_download(tmp_path):
+    client = TestClient(create_app(tmp_path / "data"))
+    assert client.get("/download/PaintWorldServer.zip").status_code == 404
+    share = tmp_path / "data" / "share"
+    share.mkdir(parents=True)
+    (share / "PaintWorldServer.zip").write_bytes(b"PK")
+    response = client.get("/download/PaintWorldServer.zip")
+    assert response.status_code == 200 and response.content == b"PK"
