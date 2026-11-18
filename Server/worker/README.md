@@ -61,6 +61,8 @@ source ~/TRELLIS.2/.venv/bin/activate
 python /mnt/d/Unity/3D_Paninting/Server/worker/trellis_worker.py --host 0.0.0.0 --port 8090 --token '<공유 비밀>'
 ```
 
+Windows에서는 `작업기_실행.bat`을 더블클릭해도 같다. 토큰은 Windows 환경 변수 `TRELLIS_WORKER_TOKEN`에서 읽으므로 처음 한 번 `setx TRELLIS_WORKER_TOKEN "<공유 비밀>"`(서버 PC와 같은 값) 후 새 창에서 연다. bat은 ASCII + CRLF로 둔다 (UTF-8 한글이 있으면 cmd가 줄을 잘못 읽음).
+
 저장소 경로가 다르면 스크립트 경로를 바꿉니다. `--trellis ~/TRELLIS.2`가 기본값입니다. 토큰은 충분히 긴 임의 문자열을 사용하고 운영 서버의 `TRELLIS_WORKER_TOKEN`과 맞춥니다.
 
 모델은 시작할 때 별도 스레드에서 한 번 로드됩니다. `/health`는 로드 전 `loaded: false`, 준비 후 `loaded: true`입니다. 로드 실패는 `ok: false`와 작업기 콘솔로 확인합니다. 모든 경로(health·docs·파일 포함)에 `X-Worker-Token`이 필요하며 틀리면 401입니다.
