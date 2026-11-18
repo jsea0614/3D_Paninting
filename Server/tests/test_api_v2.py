@@ -458,7 +458,10 @@ def test_photo_worker_reports_all_seeds_failed_with_retake_message(tmp_path):
     assert app.state.scans.list() == []
 
 
-def test_photo_times_out_after_ten_minutes_and_releases_capacity(tmp_path):
+def test_photo_times_out_after_ten_minutes_and_releases_capacity(tmp_path, monkeypatch):
+    import scans
+    real_sleep = time.sleep
+    monkeypatch.setattr(scans.time, "sleep", lambda s: real_sleep(0.01))  # 10분은 생성 시작부터라 한 번 더 확인함
     now = [0.0]
 
     class SlowWorker(FakeWorker):
@@ -471,6 +474,39 @@ def test_photo_times_out_after_ten_minutes_and_releases_capacity(tmp_path):
     job = wait_photo(client, jid, "failed")
     assert "10분 시간 초과" in job["error"]
     assert not (app.state.jobs.work_dir / jid).exists()
+
+
+def test_photo_queue_wait_does_not_count_toward_ten_minutes(tmp_path, monkeypatch):
+    import scans
+    real_sleep = time.sleep
+    monkeypatch.setattr(scans.time, "sleep", lambda s: real_sleep(0.01))
+    now = [0.0]
+    states = iter(["queued", "queued", "running", "done"])  # 대기 800초 + 생성 800초: 올린 때부터는 10분을 넘김
+
+    class QueuedWorker(FakeWorker):
+        def status(self, job_id, **kwargs):
+            now[0] += 400
+            state = next(states)
+            done = 3 if state == "done" else 0
+            return {"status": state, "done": done, "total": 3, "error": None,
+                    "candidates": self.candidates if state == "done" else [False] * 3}
+
+    app, client = photo_setup(tmp_path, QueuedWorker(), clock=lambda: now[0])
+    jid = post_photo(client).json()["jobId"]
+    assert wait_photo(client, jid)["status"] == "choose"
+
+
+def test_photo_queue_wait_has_upper_limit(tmp_path):
+    now = [0.0]
+
+    class StuckWorker(FakeWorker):
+        def status(self, job_id, **kwargs):
+            now[0] += 3601
+            return {"status": "queued", "done": 0, "total": 3, "candidates": [False] * 3}
+
+    app, client = photo_setup(tmp_path, StuckWorker(), clock=lambda: now[0])
+    jid = post_photo(client).json()["jobId"]
+    assert "대기 시간 초과" in wait_photo(client, jid, "failed")["error"]
 
 
 def test_photo_concurrent_choice_registers_once(tmp_path):

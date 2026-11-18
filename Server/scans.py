@@ -35,7 +35,8 @@ CONVERT_SCRIPT = Path(__file__).parent / "tools" / "convert_scan.py"
 MAX_LIBRARY = 40
 MAX_PHOTO_BYTES = 20 * 1024 * 1024
 PHOTO_EXPIRED_SECONDS = 30 * 60
-GENERATION_TIMEOUT = 10 * 60
+GENERATION_TIMEOUT = 10 * 60   # 작업기가 이 사진을 실제로 시작한 뒤부터
+QUEUE_TIMEOUT = 60 * 60        # 앞 사진들을 기다리는 시간 상한 (작업기가 멈춰도 자리를 계속 잡지 않게)
 PENDING = {"queued", "generating", "converting", "choose"}
 
 # (입력 경로, 출력 GLB 경로, 썸네일 PNG 경로) → 변환 보고서 dict
@@ -208,10 +209,16 @@ class ScanJobs:
     def _generate(self, job, data):
         self._update(job, status="generating")
         seeds = [secrets.randbelow(2**31) for _ in range(3)]
-        deadline = self.clock() + GENERATION_TIMEOUT
+        queued_until = self.clock() + QUEUE_TIMEOUT
+        started = None  # 작업기가 queued를 벗어난 시각: 앞 사진을 기다린 시간은 10분에 넣지 않는다
 
         def remaining():
-            value = deadline - self.clock()
+            now = self.clock()
+            if started is None:
+                if now >= queued_until:
+                    raise TimeoutError("대기 시간 초과")
+                return min(30, queued_until - now)
+            value = started + GENERATION_TIMEOUT - now
             if value <= 0:
                 raise TimeoutError("10분 시간 초과")
             return min(30, value)
@@ -220,6 +227,8 @@ class ScanJobs:
             remote_id = self.worker.submit(job.sourceName, data, seeds, timeout=remaining())
             while True:
                 state = self.worker.status(remote_id, timeout=remaining())
+                if started is None and state["status"] != "queued":
+                    started = self.clock()
                 self._update(job, progress={"done": state["done"], "total": state["total"]})
                 if state["status"] == "done":
                     break
