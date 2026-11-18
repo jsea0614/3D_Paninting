@@ -77,7 +77,7 @@ python /mnt/d/Unity/3D_Paninting/Server/worker/trellis_worker.py --host 0.0.0.0 
 
 결과는 `~/scanlab/jobs/{id}/`에 보관하고 완료 후 1시간이면 지웁니다. 재시작 후 오래된 UUID 작업 폴더도 정리합니다. 진행 중 작업은 재시작으로 사라지고 서버가 실패로 표시합니다. 업로드 사진은 모든 시드 시도 후 지웁니다.
 
-## Windows·Tailscale 연결 (현장 확인 필요)
+## Windows·Tailscale 연결
 
 먼저 GPU PC Windows에서 다음을 확인합니다:
 
@@ -98,6 +98,15 @@ netsh interface portproxy add v4tov4 listenaddress=<GPU-PC-Tailscale-IP> listenp
 
 서버 PC에서 같은 토큰으로 `http://<GPU-PC-Tailscale-IP>:8090/health`가 되는지 확인해야 연결이 확정됩니다. 공용 인터넷에 포트를 직접 개방하지 않습니다.
 
+**2026-11-18 확인 (미러 모드, portproxy 없음):** 서버 PC(다른 공간·다른 공유기)와 GPU PC를 Tailscale 같은 계정으로 잇고, GPU PC에 `.wslconfig` `[wsl2] networkingMode=mirrored` → `wsl --shutdown`. WSL에 Tailscale IP가 그대로 보이고 서버 PC에서 `/health` 200을 받았습니다 (직접 연결 안 돼 DERP 중계 약 80 ms). 방화벽은 Windows 규칙 + Hyper-V 규칙 둘 다 필요합니다 (관리자):
+
+```powershell
+New-NetFirewallRule -DisplayName 'PaintWorld TRELLIS' -Direction Inbound -Protocol TCP -LocalPort 8090 -RemoteAddress <서버 PC Tailscale IP> -Action Allow -Profile Any
+New-NetFirewallHyperVRule -Name PaintWorldTrellis -DisplayName 'PaintWorld TRELLIS' -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 8090 -RemoteAddresses <서버 PC Tailscale IP>
+```
+
+원격 주소를 서버 PC로 제한하면 GPU PC 자신에서 자기 Tailscale·LAN IP로 부를 때는 시간 초과가 정상입니다 (localhost는 됨). 서버 PC의 `TRELLIS_WORKER_*`는 `setx`로 넣고 새 창에서 서버(관제 앱)를 켭니다. 실제 사진 생성 왕복은 아직 이 구성에서 확인하지 않았습니다.
+
 ## 인수 확인
 
 - Windows localhost·Tailscale 경유 각각 health 확인
@@ -114,4 +123,4 @@ netsh interface portproxy add v4tov4 listenaddress=<GPU-PC-Tailscale-IP> listenp
 - 사진 1장 → 시드 3개 → 후보 3개 변환 통과: 410.26초 (Unity 작업 병행).
 - 선택한 토끼: 1,410삼각형, 512×512 텍스처, 60,456B. 폰에서 다른 사진 등록도 확인.
 - 색칠 앱에서 두 항목과 썸네일, Quest 3에서 토끼 표시·색·정면 방향을 사용자 확인.
-- 별도 PC/Tailscale·다인 부하·Quest 프레임 측정은 미실시.
+- 별도 PC/Tailscale·다인 부하·Quest 프레임 측정은 미실시. (Tailscale 별도 PC `/health`는 2026-11-18 확인, 위 "Windows·Tailscale 연결")
