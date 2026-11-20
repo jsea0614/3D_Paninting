@@ -329,7 +329,8 @@ def bake_to_single_texture(obj):
 
 def normalize_transform(obj):
     """피벗을 바운딩박스 중심으로 옮기고, 가장 긴 변이 0.5m를 넘으면 줄입니다. 결과 크기(m)를 돌려줍니다."""
-    corners = [Vector(c) for c in obj.bound_box]
+    # obj.bound_box는 bmesh·Decimate 적용 뒤 갱신되지 않을 수 있어 정점에서 직접 잽니다 (중심이 2~3cm 어긋나 검사 실패하던 원인).
+    corners = [v.co for v in obj.data.vertices]
     lo = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
     hi = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
     center = (lo + hi) / 2
